@@ -1,0 +1,26 @@
+[
+  {
+    "external_id": "source-unique-123",
+    "category_slug": "it",
+    "title_fa": "متخصص توسعه نرم‌افزار",
+    "title_de": "Fachinformatiker/in – Anwendungsentwicklung",
+    "employer_name": "Example GmbH",
+    "description_fa": "شرح فارسی فرصت و شرایط آن",
+    "description_de": "Beschreibung der Ausbildung",
+    "city": "Berlin",
+    "state": "Berlin",
+    "training_type": "dual",
+    "start_date": "2027-08-01",
+    "application_deadline": "2027-03-31",
+    "monthly_salary_from": 1100,
+    "monthly_salary_to": 1350,
+    "required_german_level": "b1",
+    "education_requirement": "Schulabschluss",
+    "skills": ["PHP", "Git", "Teamarbeit"],
+    "accepts_international": true,
+    "visa_support": "possible",
+    "application_url": "https://example.com/apply",
+    "contact_email": "ausbildung@example.com",
+    "source_updated_at": "2026-09-03T10:00:00+02:00"
+  }
+]
