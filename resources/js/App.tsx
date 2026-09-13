@@ -1,23 +1,5 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
-import {
-  ArrowLeft,
-  BookOpenCheck,
-  Bookmark,
-  BriefcaseBusiness,
-  CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
-  FileUser,
-  Filter,
-  Languages,
-  LogOut,
-  Menu,
-  Search,
-  ShieldCheck,
-  Sparkles,
-  UserRound,
-  X,
-} from "lucide-react";
+import { FormEvent, ReactNode, useCallback, useEffect, useState } from "react";
+import { ArrowLeft, BadgeEuro, Bookmark, BriefcaseBusiness, Building2, CalendarDays, Check, CheckCircle2, ChevronLeft, Clock3, FileCheck2, FileText, GraduationCap, HeartPulse, House, LayoutGrid, Lightbulb, ListChecks, LogOut, MapPin, Menu, Mic, Search, Sparkles, Stethoscope, UserRound, Wrench, X } from "lucide-react";
 import { api } from "./api";
 import AuthDialog from "./components/AuthDialog";
 import CvBuilder from "./components/CvBuilder";
@@ -25,255 +7,63 @@ import OpportunityCard from "./components/OpportunityCard";
 import ProfileDrawer from "./components/ProfileDrawer";
 import type { Meta, Opportunity, OpportunityCollection, User } from "./types";
 
-type Filters = {
-  q: string;
-  category: string;
-  city: string;
-  german_level: string;
-  international: boolean;
-  sort: string;
-};
-
+type View = "home" | "search" | "details" | "guide" | "eligibility" | "tools" | "interview" | "applications";
+type Filters = { q: string; category: string; city: string; german_level: string; international: boolean; sort: string };
 const emptyMeta: Meta = { categories: [], cities: [], german_levels: ["A2", "B1", "B2", "C1"] };
 const initialFilters: Filters = { q: "", category: "", city: "", german_level: "", international: false, sort: "latest" };
+const fa = new Intl.NumberFormat("fa-IR");
+
+function AppIcon({ children, tone = "blue" }: { children: ReactNode; tone?: string }) { return <span className={`app-icon ${tone}`}>{children}</span>; }
 
 export default function App() {
-  const [meta, setMeta] = useState<Meta>(emptyMeta);
-  const [filters, setFilters] = useState<Filters>(initialFilters);
-  const [searchDraft, setSearchDraft] = useState("");
-  const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
-  const [page, setPage] = useState(1);
-  const [lastPage, setLastPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [user, setUser] = useState<User | null>(null);
-  const [authOpen, setAuthOpen] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
-  const [cvOpen, setCvOpen] = useState(false);
-  const [mobileMenu, setMobileMenu] = useState(false);
-  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [view, setView] = useState<View>("home"), [meta, setMeta] = useState<Meta>(emptyMeta), [filters, setFilters] = useState<Filters>(initialFilters), [searchDraft, setSearchDraft] = useState("");
+  const [opportunities, setOpportunities] = useState<Opportunity[]>([]), [selected, setSelected] = useState<Opportunity | null>(null), [page, setPage] = useState(1), [lastPage, setLastPage] = useState(1), [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true), [error, setError] = useState(""), [user, setUser] = useState<User | null>(null), [authOpen, setAuthOpen] = useState(false), [profileOpen, setProfileOpen] = useState(false), [cvOpen, setCvOpen] = useState(false), [mobileMenu, setMobileMenu] = useState(false), [favoritesOnly, setFavoritesOnly] = useState(false), [eligibilityDone, setEligibilityDone] = useState(false), [interviewing, setInterviewing] = useState(false);
 
   const loadOpportunities = useCallback(async () => {
-    setLoading(true);
-    setError("");
+    setLoading(true); setError("");
     try {
       let response: OpportunityCollection;
-      if (favoritesOnly && user) {
-        response = await api<OpportunityCollection>(`/favorites?page=${page}`);
-      } else {
-        const params = new URLSearchParams({ page: String(page), per_page: "12", sort: filters.sort });
-        if (filters.q) params.set("q", filters.q);
-        if (filters.category) params.set("category", filters.category);
-        if (filters.city) params.set("city", filters.city);
-        if (filters.german_level) params.set("german_level", filters.german_level.toLowerCase());
-        if (filters.international) params.set("international", "1");
-        response = await api<OpportunityCollection>(`/opportunities?${params}`);
-      }
-      setOpportunities(response.data);
-      setLastPage(response.meta.last_page);
-      setTotal(response.meta.total);
-    } catch {
-      setError("دریافت فرصت‌ها ممکن نشد. اتصال سرور و دیتابیس را بررسی کنید.");
-    } finally {
-      setLoading(false);
-    }
+      if (favoritesOnly && user) response = await api<OpportunityCollection>(`/favorites?page=${page}`);
+      else { const params = new URLSearchParams({ page: String(page), per_page: "12", sort: filters.sort }); Object.entries(filters).forEach(([k,v]) => { if (v && !["sort","international"].includes(k)) params.set(k, String(v).toLowerCase()); }); if (filters.international) params.set("international", "1"); response = await api<OpportunityCollection>(`/opportunities?${params}`); }
+      setOpportunities(response.data); setLastPage(response.meta.last_page); setTotal(response.meta.total);
+    } catch { setError("دریافت فرصت‌ها ممکن نشد. اتصال سرور و دیتابیس را بررسی کنید."); } finally { setLoading(false); }
   }, [favoritesOnly, filters, page, user]);
-
-  useEffect(() => {
-    api<Meta>("/meta").then(setMeta).catch(() => undefined);
-    api<{ user: User }>("/auth/me").then((response) => setUser(response.user)).catch(() => setUser(null));
-  }, []);
-
-  useEffect(() => {
-    void loadOpportunities();
-  }, [loadOpportunities]);
-
-  function setFilter<K extends keyof Filters>(key: K, value: Filters[K]) {
-    setPage(1);
-    setFavoritesOnly(false);
-    setFilters((current) => ({ ...current, [key]: value }));
-  }
-
-  function submitSearch(event: FormEvent) {
-    event.preventDefault();
-    setFilter("q", searchDraft.trim());
-    document.querySelector("#opportunities")?.scrollIntoView({ behavior: "smooth" });
-  }
-
-  async function refreshUser() {
-    const response = await api<{ user: User }>("/auth/me");
-    setUser(response.user);
-  }
-
-  async function logout() {
-    await api("/auth/logout", { method: "POST" });
-    setUser(null);
-    setFavoritesOnly(false);
-  }
-
-  async function toggleFavorite(opportunity: Opportunity) {
-    if (!user) {
-      setAuthOpen(true);
-      return;
-    }
-    setOpportunities((current) => current.map((item) => item.id === opportunity.id ? { ...item, is_favorite: !item.is_favorite } : item));
-    try {
-      await api(`/favorites/${opportunity.slug}`, { method: opportunity.is_favorite ? "DELETE" : "PUT" });
-      if (favoritesOnly && opportunity.is_favorite) setOpportunities((current) => current.filter((item) => item.id !== opportunity.id));
-    } catch {
-      setOpportunities((current) => current.map((item) => item.id === opportunity.id ? { ...item, is_favorite: opportunity.is_favorite } : item));
-    }
-  }
-
-  function apply(opportunity: Opportunity) {
-    window.open(opportunity.application_url, "_blank", "noopener,noreferrer");
-    if (user) void api(`/application-clicks/${opportunity.slug}`, { method: "POST", body: JSON.stringify({ channel: "application_url" }) }).catch(() => undefined);
-  }
-
-  function showFavorites() {
-    if (!user) {
-      setAuthOpen(true);
-      return;
-    }
-    setFavoritesOnly(true);
-    setPage(1);
-    document.querySelector("#opportunities")?.scrollIntoView({ behavior: "smooth" });
-  }
-
-  const activeFilterCount = [filters.category, filters.city, filters.german_level, filters.international].filter(Boolean).length;
-
-  return (
-    <>
-      <header className="site-header">
-        <div className="container nav-shell">
-          <a href="#top" className="brand" aria-label="صفحه اصلی">
-            <span className="brand-mark"><BriefcaseBusiness /></span>
-            <span><strong>Ausbildung</strong><b>Match</b></span>
-          </a>
-          <nav className={mobileMenu ? "mobile-open" : ""}>
-            <a href="#opportunities" onClick={() => setMobileMenu(false)}>فرصت‌ها</a>
-            <a href="#how-it-works" onClick={() => setMobileMenu(false)}>راهنما</a>
-            <button type="button" onClick={showFavorites}><Bookmark size={17} /> ذخیره‌شده‌ها</button>
-            {user?.is_admin && <a href="/admin">پنل مدیریت</a>}
-          </nav>
-          <div className="nav-actions">
-            {user ? (
-              <>
-                <button type="button" className="nav-profile" onClick={() => setProfileOpen(true)}><UserRound size={18} /> {user.name.split(" ")[0]}</button>
-                <button type="button" className="icon-button" onClick={logout} title="خروج"><LogOut size={19} /></button>
-              </>
-            ) : <button type="button" className="login-button" onClick={() => setAuthOpen(true)}>ورود / ثبت‌نام</button>}
-            <button type="button" className="mobile-toggle" onClick={() => setMobileMenu((value) => !value)} aria-label="منو">{mobileMenu ? <X /> : <Menu />}</button>
-          </div>
-        </div>
-      </header>
-
-      <main id="top">
-        <section className="hero">
-          <div className="hero-orb orb-one" /><div className="hero-orb orb-two" />
-          <div className="container hero-content">
-            <div className="hero-copy">
-              <span className="eyebrow"><Sparkles size={16} /> مسیر حرفه‌ای شما در آلمان</span>
-              <h1>آوسبیلدونگ مناسب خودت را <em>هوشمندانه</em> پیدا کن</h1>
-              <p>فرصت‌های معتبر آموزش حرفه‌ای آلمان را جست‌وجو کن، پروفایلت را بساز و ببین هر موقعیت چقدر با شرایط تو هماهنگ است.</p>
-              <form className="hero-search" onSubmit={submitSearch}>
-                <Search size={21} />
-                <input value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="عنوان رشته، شرکت یا شهر…" aria-label="جست‌وجو" />
-                <button type="submit">جست‌وجو <ArrowLeft size={18} /></button>
-              </form>
-              <div className="trust-row">
-                <span><CheckCircle2 /> منابع شفاف</span><span><ShieldCheck /> اطلاعات امن</span><span><Languages /> کاملاً فارسی</span>
-              </div>
-            </div>
-            <div className="hero-card-wrap" aria-hidden="true">
-              <div className="hero-match-card">
-                <span className="mini-label">فرصت پیشنهادی امروز</span>
-                <div className="hero-card-title"><div className="company-logo">AM</div><div><strong>Fachinformatiker/in</strong><span>Berlin · Ausbildung Dual</span></div></div>
-                <div className="hero-score"><div className="score-ring"><b>۹۲٪</b></div><div><strong>تطابق عالی</strong><span>زبان، مهارت و علاقه‌مندی</span></div></div>
-                <div className="fake-bars"><i /><i /><i /></div>
-              </div>
-              <div className="floating-chip"><span>+{new Intl.NumberFormat("fa-IR").format(total || 120)}</span> فرصت فعال</div>
-            </div>
-          </div>
-        </section>
-
-        <section className="stats-strip">
-          <div className="container">
-            <div><strong>{new Intl.NumberFormat("fa-IR").format(total)}</strong><span>فرصت در سامانه</span></div>
-            <div><strong>{new Intl.NumberFormat("fa-IR").format(meta.cities.length)}</strong><span>شهر آلمان</span></div>
-            <div><strong>{new Intl.NumberFormat("fa-IR").format(meta.categories.length)}</strong><span>حوزه شغلی</span></div>
-            <div><strong>۱۰۰٪</strong><span>رایگان برای متقاضی</span></div>
-          </div>
-        </section>
-
-        <section className="opportunities-section" id="opportunities">
-          <div className="container">
-            <div className="section-heading">
-              <div><span className="section-kicker">جست‌وجوی فرصت‌ها</span><h2>{favoritesOnly ? "فرصت‌های ذخیره‌شده" : "جدیدترین موقعیت‌ها"}</h2></div>
-              {favoritesOnly && <button className="text-button" onClick={() => { setFavoritesOnly(false); setPage(1); }}>نمایش همه فرصت‌ها</button>}
-            </div>
-
-            {!favoritesOnly && (
-              <div className="filter-panel">
-                <span className="filter-title"><Filter size={18} /> فیلترها {activeFilterCount > 0 && <b>{activeFilterCount}</b>}</span>
-                <label>حوزه
-                  <select value={filters.category} onChange={(event) => setFilter("category", event.target.value)}><option value="">همه حوزه‌ها</option>{meta.categories.map((category) => <option key={category.id} value={category.slug}>{category.name_fa}</option>)}</select>
-                </label>
-                <label>شهر
-                  <select value={filters.city} onChange={(event) => setFilter("city", event.target.value)}><option value="">همه شهرها</option>{meta.cities.map((city) => <option key={city} value={city}>{city}</option>)}</select>
-                </label>
-                <label>سطح زبان
-                  <select value={filters.german_level} onChange={(event) => setFilter("german_level", event.target.value)}><option value="">هر سطحی</option>{meta.german_levels.map((level) => <option key={level}>{level}</option>)}</select>
-                </label>
-                <label>مرتب‌سازی
-                  <select value={filters.sort} onChange={(event) => setFilter("sort", event.target.value)}>
-                    <option value="latest">جدیدترین</option><option value="start">تاریخ شروع</option><option value="salary">بیشترین حقوق</option>{user?.profile_completed && <option value="match">بیشترین تطابق</option>}
-                  </select>
-                </label>
-                <label className="international-toggle"><input type="checkbox" checked={filters.international} onChange={(event) => setFilter("international", event.target.checked)} /><span>فقط پذیرش بین‌المللی</span></label>
-                {activeFilterCount > 0 && <button type="button" className="clear-filters" onClick={() => { setFilters({ ...initialFilters, q: filters.q }); setPage(1); }}>پاک کردن فیلترها</button>}
-              </div>
-            )}
-
-            {loading ? (
-              <div className="cards-grid skeleton-grid">{Array.from({ length: 6 }).map((_, index) => <div className="skeleton-card" key={index}><i /><i /><i /><i /></div>)}</div>
-            ) : error ? (
-              <div className="empty-state"><ShieldCheck /><h3>فرصت‌ها بارگذاری نشدند</h3><p>{error}</p><button className="secondary-button" onClick={loadOpportunities}>تلاش دوباره</button></div>
-            ) : opportunities.length ? (
-              <div className="cards-grid">{opportunities.map((opportunity) => <OpportunityCard key={opportunity.id} opportunity={opportunity} onFavorite={toggleFavorite} onApply={apply} />)}</div>
-            ) : (
-              <div className="empty-state"><Search /><h3>نتیجه‌ای پیدا نشد</h3><p>فیلترها را تغییر دهید یا عبارت دیگری جست‌وجو کنید.</p></div>
-            )}
-
-            {lastPage > 1 && <div className="pagination"><button disabled={page <= 1} onClick={() => setPage((value) => value - 1)}><ChevronRight /></button><span>صفحه {new Intl.NumberFormat("fa-IR").format(page)} از {new Intl.NumberFormat("fa-IR").format(lastPage)}</span><button disabled={page >= lastPage} onClick={() => setPage((value) => value + 1)}><ChevronLeft /></button></div>}
-          </div>
-        </section>
-
-        <section className="how-section" id="how-it-works">
-          <div className="container">
-            <div className="section-heading centered"><div><span className="section-kicker">ساده و کاربردی</span><h2>سه قدم تا فرصت مناسب</h2></div></div>
-            <div className="steps-grid">
-              <article><span>۱</span><UserRound /><h3>پروفایل بساز</h3><p>زبان، تحصیلات، مهارت و شهرهای موردعلاقه‌ات را ثبت کن.</p></article>
-              <article><span>۲</span><Sparkles /><h3>تطابق را ببین</h3><p>سامانه برای هر فرصت یک امتیاز قابل‌فهم محاسبه می‌کند.</p></article>
-              <article><span>۳</span><BookOpenCheck /><h3>درخواست بده</h3><p>جزئیات را بررسی کن و از مسیر رسمی منبع اقدام کن.</p></article>
-            </div>
-          </div>
-        </section>
-
-        <section className="cta-section">
-          <div className="container cta-card">
-            <div><span>آماده‌ای شروع کنی؟</span><h2>رزومه آلمانی‌ات را همین‌جا بساز</h2><p>یک Lebenslauf تمیز بساز و آن را با چاپ مرورگر به PDF تبدیل کن.</p></div>
-            <button className="light-button" onClick={() => user ? setCvOpen(true) : setAuthOpen(true)}><FileUser /> ساخت رزومه آلمانی</button>
-          </div>
-        </section>
-      </main>
-
-      <footer><div className="container"><div className="brand footer-brand"><span className="brand-mark"><BriefcaseBusiness /></span><span><strong>Ausbildung</strong><b>Match</b></span></div><p>این سامانه واسطه استخدام نیست؛ پیش از ارسال درخواست، جزئیات را در منبع رسمی بررسی کنید.</p><span>© {new Date().getFullYear()} Ausbildung Match</span></div></footer>
-
-      {authOpen && <AuthDialog onClose={() => setAuthOpen(false)} onSuccess={(authenticatedUser) => { setUser(authenticatedUser); setAuthOpen(false); }} />}
-      {profileOpen && <ProfileDrawer meta={meta} onClose={() => setProfileOpen(false)} onSaved={() => void refreshUser()} />}
-      {cvOpen && user && <CvBuilder user={user} onClose={() => setCvOpen(false)} />}
-    </>
-  );
+  useEffect(() => { api<Meta>("/meta").then(setMeta).catch(() => undefined); api<{ user: User }>("/auth/me").then(r => setUser(r.user)).catch(() => setUser(null)); }, []);
+  useEffect(() => { void loadOpportunities(); }, [loadOpportunities]); useEffect(() => { window.scrollTo({ top: 0, behavior: "smooth" }); }, [view]);
+  const navigate = (next: View) => { setView(next); setMobileMenu(false); };
+  function setFilter<K extends keyof Filters>(key: K, value: Filters[K]) { setPage(1); setFavoritesOnly(false); setFilters(c => ({ ...c, [key]: value })); }
+  function submitSearch(e: FormEvent) { e.preventDefault(); setFilter("q", searchDraft.trim()); navigate("search"); }
+  async function toggleFavorite(o: Opportunity) { if (!user) { setAuthOpen(true); return; } setOpportunities(a => a.map(x => x.id === o.id ? {...x,is_favorite:!x.is_favorite}:x)); try { await api(`/favorites/${o.slug}`, { method: o.is_favorite ? "DELETE" : "PUT" }); } catch { setOpportunities(a => a.map(x => x.id === o.id ? {...x,is_favorite:o.is_favorite}:x)); } }
+  function apply(o: Opportunity) { window.open(o.application_url, "_blank", "noopener,noreferrer"); if (user) void api(`/application-clicks/${o.slug}`, { method:"POST", body:JSON.stringify({channel:"application_url"}) }).catch(() => undefined); }
+  const openDetails = (o: Opportunity) => { setSelected(o); navigate("details"); };
+  const featured = opportunities[0], activeFilterCount = [filters.category, filters.city, filters.german_level, filters.international].filter(Boolean).length;
+  const navItems: Array<[View,string]> = [["search","فرصت‌ها"],["guide","راهنمای رشته‌ها"],["eligibility","بررسی شرایط"],["tools","ابزارها"]];
+  return <div className="app-shell" dir="rtl"><header className="site-header"><div className="container nav-shell"><button className="brand" onClick={() => navigate("home")}><span className="brand-mark"><BriefcaseBusiness/></span><span><strong>Ausbildung</strong><b>Match</b></span></button><nav className={mobileMenu ? "mobile-open":""}>{navItems.map(([k,l]) => <button key={k} className={view===k?"active":""} onClick={() => navigate(k)}>{l}</button>)}</nav><div className="nav-actions">{user ? <><button className="nav-profile" onClick={() => setProfileOpen(true)}><UserRound size={18}/>{user.name.split(" ")[0]}</button><button className="icon-button" onClick={async()=>{await api("/auth/logout",{method:"POST"});setUser(null);}}><LogOut size={18}/></button></>:<button className="login-button" onClick={()=>setAuthOpen(true)}>ورود / ثبت‌نام</button>}<button className="mobile-toggle" onClick={()=>setMobileMenu(!mobileMenu)}>{mobileMenu?<X/>:<Menu/>}</button></div></div></header><main>
+  {view==="home"&&<Home total={total} meta={meta} featured={featured} searchDraft={searchDraft} setSearchDraft={setSearchDraft} submitSearch={submitSearch} navigate={navigate} openDetails={openDetails}/>}
+  {view==="search"&&<SearchPage opportunities={opportunities} loading={loading} error={error} filters={filters} meta={meta} activeFilterCount={activeFilterCount} setFilter={setFilter} toggleFavorite={toggleFavorite} apply={apply} openDetails={openDetails} favoritesOnly={favoritesOnly} setFavoritesOnly={setFavoritesOnly} total={total} page={page} lastPage={lastPage} setPage={setPage} reload={loadOpportunities}/>}
+  {view==="details"&&<DetailsPage opportunity={selected||featured} onBack={()=>navigate("search")} onFavorite={toggleFavorite} onApply={apply}/>}
+  {view==="guide"&&<GuidePage navigate={navigate}/>} {view==="eligibility"&&<EligibilityPage done={eligibilityDone} setDone={setEligibilityDone} navigate={navigate}/>} {view==="tools"&&<ToolsPage openCv={()=>user?setCvOpen(true):setAuthOpen(true)} navigate={navigate}/>} {view==="interview"&&<InterviewPage active={interviewing} setActive={setInterviewing}/>} {view==="applications"&&<ApplicationsPage opportunities={opportunities.slice(0,4)} openDetails={openDetails}/>}</main><BottomNav view={view} navigate={navigate} openProfile={()=>user?setProfileOpen(true):setAuthOpen(true)}/>
+  {authOpen&&<AuthDialog onClose={()=>setAuthOpen(false)} onSuccess={u=>{setUser(u);setAuthOpen(false);}}/>}{profileOpen&&<ProfileDrawer meta={meta} onClose={()=>setProfileOpen(false)} onSaved={()=>api<{user:User}>("/auth/me").then(r=>setUser(r.user))}/>} {cvOpen&&user&&<CvBuilder user={user} onClose={()=>setCvOpen(false)}/>}</div>;
 }
+
+function BlueHero({eyebrow,title,text,icon}:{eyebrow:string;title:string;text:string;icon:ReactNode}) { return <section className="blue-hero"><div className="hero-blob one"/><div className="hero-blob two"/><div className="container blue-hero-grid"><div><span className="hero-eyebrow">{eyebrow}</span><h1>{title}</h1><p>{text}</p></div><div className="friendly-illustration"><span className="spark">✦</span><div className="illustration-orbit">{icon}</div><b>آینده روشن‌تر<br/>برای تو</b></div></div></section>; }
+
+function Home({total,meta,featured,searchDraft,setSearchDraft,submitSearch,navigate,openDetails}:any) { return <><section className="home-hero"><div className="hero-blob one"/><div className="hero-blob two"/><div className="container home-hero-grid"><div className="hero-copy"><span className="hero-eyebrow"><Sparkles size={17}/> آینده شغلی تو از اینجا شروع می‌شود</span><h1>سلام، آماده‌ای مسیر حرفه‌ای‌ات را در آلمان بسازی؟</h1><p>فرصت‌های معتبر آوسبیلدونگ را پیدا کن، شرایطت را بسنج و با ابزارهای حرفه‌ای برای درخواست آماده شو.</p><div className="hero-actions"><button className="primary-button" onClick={()=>navigate("search")}><Search/> جست‌وجوی آوسبیلدونگ</button><button className="outline-light" onClick={()=>navigate("eligibility")}><ListChecks/> بررسی شرایط من</button></div></div><div className="friendly-illustration large"><span className="spark">✦</span><div className="illustration-orbit"><GraduationCap/></div><b>تو می‌تونی!</b></div></div></section><section className="home-content container"><form className="floating-search" onSubmit={submitSearch}><Search/><input value={searchDraft} onChange={(e:any)=>setSearchDraft(e.target.value)} placeholder="رشته، شهر یا شرکت"/><button>جست‌وجو</button></form><SectionHeading title="فرصت‌های تازه" action={()=>navigate("search")}/>{featured&&<div className="featured-row"><MiniOpportunity item={featured} onClick={()=>openDetails(featured)}/><MiniOpportunity item={{...featured,id:-1,title_fa:"آوسبیلدونگ فناوری اطلاعات",title_de:"Fachinformatiker/in",city:"مونیخ"}} onClick={()=>navigate("search")}/></div>}<div className="quick-grid"><Quick icon={<HeartPulse/>} title="پرستاری" text="معرفی رشته و مسیر شغلی" onClick={()=>navigate("guide")}/><Quick icon={<FileText/>} title="فناوری اطلاعات" text="فرصت‌های محبوب این هفته" onClick={()=>navigate("search")}/><Quick icon={<Wrench/>} title="ابزارهای درخواست" text="رزومه و انگیزه‌نامه" onClick={()=>navigate("tools")}/></div><div className="profile-banner"><div className="progress-ring">۷۵٪</div><div><h3>پروفایلت را کامل کن</h3><p>با تکمیل اطلاعات، پیشنهادهای دقیق‌تری دریافت می‌کنی.</p></div><button onClick={()=>navigate("eligibility")}>ادامه مسیر <ArrowLeft/></button></div><div className="stat-row"><span><b>{fa.format(total)}</b> فرصت فعال</span><span><b>{fa.format(meta.cities.length)}</b> شهر</span><span><b>{fa.format(meta.categories.length)}</b> حوزه شغلی</span></div></section></>; }
+function SectionHeading({title,action}:any){return <div className="section-heading"><div><span>پیشنهادهای مناسب تو</span><h2>{title}</h2></div><button onClick={action}>مشاهده همه <ChevronLeft/></button></div>};
+function MiniOpportunity({item,onClick}:{item:Opportunity;onClick:()=>void}) { return <button className="mini-opportunity" onClick={onClick}><AppIcon><Building2/></AppIcon><div><b>{item.title_fa}</b><span dir="ltr">{item.title_de}</span><small><MapPin/> {item.city} · زبان {item.required_german_level}</small></div><ChevronLeft/></button>; }
+function Quick({icon,title,text,onClick}:any){return <button onClick={onClick}><AppIcon>{icon}</AppIcon><b>{title}</b><span>{text}</span></button>}
+
+function SearchPage(p:any) { return <><BlueHero eyebrow="فرصت مناسب همین نزدیکی‌ست" title="جست‌وجوی فرصت‌ها" text="آوسبیلدونگ یا کار رویایی‌ات را در آلمان پیدا کن." icon={<Search/>}/><section className="page-surface container search-surface"><div className="search-box"><Search/><input value={p.filters.q} onChange={(e)=>p.setFilter("q",e.target.value)} placeholder="عنوان رشته یا شغل"/></div><div className="mode-tabs"><button className="active"><GraduationCap/> آوسبیلدونگ</button><button><BriefcaseBusiness/> کار</button></div>{!p.favoritesOnly&&<div className="filter-chips"><select value={p.filters.city} onChange={(e)=>p.setFilter("city",e.target.value)}><option value="">همه شهرها</option>{p.meta.cities.map((x:string)=><option key={x}>{x}</option>)}</select><select value={p.filters.german_level} onChange={(e)=>p.setFilter("german_level",e.target.value)}><option value="">سطح زبان</option>{p.meta.german_levels.map((x:string)=><option key={x}>{x}</option>)}</select><select value={p.filters.category} onChange={(e)=>p.setFilter("category",e.target.value)}><option value="">همه رشته‌ها</option>{p.meta.categories.map((x:any)=><option key={x.id} value={x.slug}>{x.name_fa}</option>)}</select><label><input type="checkbox" checked={p.filters.international} onChange={(e)=>p.setFilter("international",e.target.checked)}/> پذیرش بین‌المللی</label></div>}<div className="results-head"><h2>{p.favoritesOnly?"ذخیره‌شده‌ها":`${fa.format(p.total)} نتیجه پیدا شد`}</h2></div>{p.loading?<div className="cards-grid">{[1,2,3].map(x=><div className="skeleton-card" key={x}/>)}</div>:p.error?<div className="empty-state"><p>{p.error}</p><button onClick={p.reload}>تلاش دوباره</button></div>:<div className="cards-grid">{p.opportunities.map((item:Opportunity)=><div className="card-wrap" key={item.id}><OpportunityCard opportunity={item} onFavorite={p.toggleFavorite} onApply={p.apply}/><button className="card-detail-link" onClick={()=>p.openDetails(item)}>مشاهده جزئیات کامل <ChevronLeft/></button></div>)}</div>}{p.lastPage>1&&<div className="pagination"><button disabled={p.page<=1} onClick={()=>p.setPage(p.page-1)}>قبلی</button><span>{fa.format(p.page)} از {fa.format(p.lastPage)}</span><button disabled={p.page>=p.lastPage} onClick={()=>p.setPage(p.page+1)}>بعدی</button></div>}</section></>; }
+
+function DetailsPage({opportunity,onBack,onFavorite,onApply}:any) { if(!opportunity)return <div className="empty-state container">فرصتی انتخاب نشده است.</div>; return <><section className="detail-hero"><div className="container"><button className="round-back" onClick={onBack}><ArrowLeft/></button><button className="round-save" onClick={()=>onFavorite(opportunity)}><Bookmark fill={opportunity.is_favorite?"currentColor":"none"}/></button><div className="detail-title"><AppIcon><HeartPulse/></AppIcon><div><h1 dir="ltr">{opportunity.title_de}</h1><p>{opportunity.employer_name}</p><span><MapPin/> {opportunity.city} · حضوری</span><span><CalendarDays/> شروع: {opportunity.start_date||"توافقی"}</span><span><BadgeEuro/> {opportunity.monthly_salary_from?`${fa.format(opportunity.monthly_salary_from)} €`:"حقوق توافقی"}</span></div></div><div className="friendly-illustration compact"><Stethoscope/></div></div></section><section className="page-surface container detail-content"><article className="content-card"><h2>درباره دوره</h2><p>{opportunity.description_fa}</p></article><article className="content-card"><h2>شرایط موردنیاز</h2><ul className="check-list"><li>زبان آلمانی {opportunity.required_german_level}</li><li>{opportunity.education_requirement||"مدرک تحصیلی مرتبط"}</li><li>علاقه به کار تیمی و یادگیری</li></ul></article><article className="content-card"><h2>مهارت‌های پیشنهادی</h2><div className="tag-list">{opportunity.skills.map((x:string)=><span key={x}>{x}</span>)}</div></article><button className="primary-button wide-action" onClick={()=>onApply(opportunity)}>ارسال درخواست <ArrowLeft/></button></section></>; }
+
+function Feature({icon,title,text}:any){return <div className="feature-line"><AppIcon>{icon}</AppIcon><div><b>{title}</b><span>{text}</span></div></div>}
+function GuidePage({navigate}:any){return <><BlueHero eyebrow="معرفی رشته" title="Pflegefachkraft — پرستاری" text="سه سال آموزش دوآل، تجربه واقعی و آینده شغلی روشن در آلمان." icon={<Stethoscope/>}/><section className="page-surface container guide-grid"><article className="content-card salary-card"><h2>حقوق ماهانه در طول دوره</h2><div><span>سال اول <b>۱٬۳۴۰ €</b></span><span>سال دوم <b>۱٬۴۰۲ €</b></span><span>سال سوم <b>۱٬۵۰۳ €</b></span></div></article><article className="content-card"><h2>چه کارهایی انجام می‌دهی؟</h2><Feature icon={<HeartPulse/>} title="مراقبت و حمایت از بیماران" text="کمک در فعالیت‌های روزمره و حفظ سلامت"/><Feature icon={<FileCheck2/>} title="مستندسازی و برنامه‌ریزی" text="ثبت وضعیت بیماران و همکاری با تیم درمان"/><Feature icon={<UserRound/>} title="ارتباط با بیماران و خانواده‌ها" text="ایجاد رابطه‌ای با اعتماد و حمایت روحی"/></article><article className="content-card future-card"><AppIcon><LayoutGrid/></AppIcon><div><h2>آینده شغلی</h2><p>تقاضا برای پرستار در آلمان بالاست و فرصت‌ها رو به افزایش است.</p></div></article><button className="primary-button wide-action" onClick={()=>navigate("search")}>مشاهده فرصت‌ها <ArrowLeft/></button></section></>}
+
+function EligibilityPage({done,setDone,navigate}:any){return <><BlueHero eyebrow="چهار قدم کوتاه" title="بررسی شرایط من" text="در چند دقیقه ببین چقدر برای شروع آوسبیلدونگ آماده‌ای." icon={<ListChecks/>}/><section className="page-surface container eligibility-card">{done?<><div className="result-grid"><div><h2>نتیجه ارزیابی</h2><p>شانس مناسبی برای اقدام داری</p><div className="score-ring">۷۸٪</div></div><div className="result-visual"><CheckCircle2/><b>شما در مسیر درستی هستید!</b></div></div><ul className="result-list"><li><Check/> سن و مدرک تحصیلی مناسب</li><li><Check/> سابقه مرتبط</li><li className="warning">! سطح فعلی زبان: B1</li></ul><div className="tip-box"><Lightbulb/><div><b>برای این رشته B2 پیشنهاد می‌شود</b><span>با تقویت زبان، شانس دریافت پیشنهادت بیشتر می‌شود.</span></div></div><button className="primary-button wide-action" onClick={()=>navigate("search")}>مشاهده فرصت‌های مناسب</button><button className="secondary-button wide-action" onClick={()=>setDone(false)}>ویرایش اطلاعات</button></>:<form className="assessment-form" onSubmit={e=>{e.preventDefault();setDone(true)}}><div className="steps"><b>۱</b><span/><b>۲</b><span/><b>۳</b><span/><b>۴</b></div><h2>اطلاعات اولیه</h2>{[["بازه سنی",["۱۸ تا ۲۴ سال","۲۵ تا ۳۴ سال","۳۵ سال به بالا"]],["آخرین مدرک تحصیلی",["دیپلم","کاردانی","کارشناسی یا بالاتر"]],["سطح زبان آلمانی",["A2","B1","B2","C1"]],["سابقه کار مرتبط",["کمتر از یک سال","۱ تا ۳ سال","بیشتر از ۳ سال"]]].map(([l,o]:any)=><label key={l}>{l}<select>{o.map((x:string)=><option key={x}>{x}</option>)}</select></label>)}<button className="primary-button wide-action">مشاهده نتیجه</button></form>}</section></>}
+
+function ToolsPage({openCv,navigate}:any){return <><BlueHero eyebrow="مدارک بهتر، فرصت‌های بیشتر" title="رزومه و انگیزه‌نامه" text="مدارکت را برای ارسال درخواست آماده و حرفه‌ای کن." icon={<FileText/>}/><section className="page-surface container"><div className="tool-grid"><article className="tool-card blue"><AppIcon><FileText/></AppIcon><h2>رزومه آلمانی</h2><span>Lebenslauf</span><div className="progress"><i/></div><small>۸۰٪ تکمیل</small><button onClick={openCv}>ادامه ویرایش <ArrowLeft/></button></article><article className="tool-card green"><AppIcon tone="green"><FileCheck2/></AppIcon><h2>انگیزه‌نامه اختصاصی</h2><span>Anschreiben</span><p>برای هر فرصت یک نسخه مناسب بساز.</p><button onClick={openCv}>ساخت انگیزه‌نامه <ArrowLeft/></button></article></div><article className="content-card"><h2>محتوای مدرک شما</h2>{["اطلاعات شخصی","سوابق تحصیلی","تجربه کاری","مدارک پیوست"].map(x=><div className="document-row" key={x}><Check/>{x}<ChevronLeft/></div>)}</article><button className="interview-link" onClick={()=>navigate("interview")}><Mic/> برای مصاحبه هم آماده شو <ChevronLeft/></button></section></>}
+function InterviewPage({active,setActive}:any){return <><BlueHero eyebrow="تمرین با هوش مصنوعی" title="تمرین مصاحبه" text="با پاسخ‌دادن به سؤال‌های واقعی، برای روز مصاحبه آماده شو." icon={<Mic/>}/><section className="page-surface container interview-card"><div className="interview-topic"><AppIcon><HeartPulse/></AppIcon><div><h2>مصاحبه پرستاری</h2><p>برای دوره آوسبیلدونگ در آلمان</p></div></div><div className="question-progress"><span>سؤال ۳ از ۸</span><i><b/></i></div><h2>چرا می‌خواهید دوره آوسبیلدونگ پرستاری را در آلمان شروع کنید؟</h2><div className="interview-visual"><UserRound/></div><button className={`mic-button ${active?"recording":""}`} onClick={()=>setActive(!active)}><Mic/></button><p>{active?"در حال ضبط پاسخ شما…":"برای پاسخ لمس کنید"}</p><span className="timer"><Clock3/> ۰۲:۰۰</span><button className="secondary-button wide-action">رد کردن سؤال</button></section></>}
+function ApplicationsPage({opportunities,openDetails}:any){const status=["دعوت به مصاحبه","در حال بررسی","مدارک ناقص","ارسال‌شده"];return <><BlueHero eyebrow="همه چیز در یک جا" title="درخواست‌های من" text="وضعیت درخواست‌هایت را مدیریت کن و قدم بعدی را از دست نده." icon={<FileCheck2/>}/><section className="page-surface container"><div className="application-stats"><span><AppIcon><FileText/></AppIcon><b>۱۲</b> همه</span><span><AppIcon tone="amber"><Clock3/></AppIcon><b>۴</b> در حال بررسی</span><span><AppIcon tone="purple"><CalendarDays/></AppIcon><b>۲</b> مصاحبه</span></div><div className="application-flow"><b>ذخیره‌شده</b><i/><b>ارسال‌شده</b><i/><b>مصاحبه</b><i/><b>نتیجه</b></div><div className="application-list">{opportunities.map((item:Opportunity,i:number)=><button key={item.id} onClick={()=>openDetails(item)}><AppIcon><Building2/></AppIcon><div><b dir="ltr">{item.title_de}</b><span>{item.employer_name}</span></div><em className={`status s${i}`}>{status[i]}</em><ChevronLeft/></button>)}</div><div className="reminder"><CalendarDays/><div><b>یادآوری مصاحبه</b><span>مصاحبه شما برای فرصت پرستاری در تاریخ ۲۳ مهر ساعت ۱۰:۰۰ است.</span></div><button>مشاهده جزئیات</button></div></section></>}
+function BottomNav({view,navigate,openProfile}:any){const items:Array<[View,string,ReactNode]>=[["home","خانه",<House/>],["search","جست‌وجو",<Search/>],["applications","درخواست‌ها",<FileText/>],["tools","ابزارها",<BriefcaseBusiness/>]];return <nav className="bottom-nav">{items.map(([k,l,i])=><button key={k} className={view===k?"active":""} onClick={()=>navigate(k)}>{i}<span>{l}</span></button>)}<button onClick={openProfile}><UserRound/><span>پروفایل</span></button></nav>}
