@@ -10,23 +10,14 @@ class AdminUserSeeder extends Seeder
 {
     public function run(): void
     {
-        $email = env('ADMIN_EMAIL', 'admin@example.com');
-        $password = env('ADMIN_PASSWORD', 'ChangeMe123!');
+        $accounts = [
+            ['name' => 'مدیر آزمایشی', 'email' => 'admin@test.com', 'is_admin' => true],
+            ['name' => env('ADMIN_NAME', 'مدیر سایت'), 'email' => env('ADMIN_EMAIL', 'admin@example.com'), 'is_admin' => true],
+        ];
 
-        $admin = User::query()->updateOrCreate(
-            ['email' => $email],
-            [
-                'name' => env('ADMIN_NAME', 'مدیر سایت'),
-                'password' => Hash::make($password),
-                'is_admin' => true,
-                'email_verified_at' => now(),
-            ]
-        );
-
-        $admin->profile()->firstOrCreate([], [
-            'german_level' => 'b2',
-            'work_experience_years' => 1,
-            'relocation_ready' => true,
-        ]);
+        foreach ($accounts as $account) {
+            $password = $account['email'] === 'admin@test.com' ? 'password' : env('ADMIN_PASSWORD', 'ChangeMe123!');
+            User::query()->updateOrCreate(['email' => $account['email']], [...$account, 'password' => Hash::make($password), 'email_verified_at' => now()]);
+        }
     }
 }
