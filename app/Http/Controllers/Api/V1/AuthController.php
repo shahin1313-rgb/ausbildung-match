@@ -10,6 +10,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
@@ -29,9 +30,16 @@ class AuthController extends Controller
 
         Auth::login($user);
         $request->session()->regenerate();
+        $sent = true;
+        try {
+            $user->sendEmailVerificationNotification();
+        } catch (\Throwable $exception) {
+            $sent = false;
+            Log::error('Registration verification mail delivery failed.', ['exception_class' => get_class($exception)]);
+        }
 
         return response()->json([
-            'message' => 'حساب کاربری ساخته شد.',
+            'message' => $sent ? 'حساب ساخته شد. لینک تأیید به ایمیل شما ارسال شد.' : 'حساب ساخته شد، ولی ارسال ایمیل انجام نشد. بعداً دوباره درخواست کنید.',
             'user' => $this->payload($user),
         ], 201);
     }
@@ -78,6 +86,7 @@ class AuthController extends Controller
             'id' => $user->id,
             'name' => $user->name,
             'email' => $user->email,
+            'email_verified' => $user->hasVerifiedEmail(),
             'is_admin' => $user->is_admin,
             'profile_completed' => $user->profile?->german_level !== 'none',
         ];

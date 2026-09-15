@@ -2,6 +2,7 @@ export type User = {
   id: number;
   name: string;
   email: string;
+  email_verified: boolean;
   is_admin: boolean;
   profile_completed: boolean;
 };

@@ -1,0 +1,1151 @@
+diff --git a/.env.example b/.env.example
+index 2f9e349448af1305430653fa295042e2e6246327..373c7875249ee083a7c8a268113cdf2f1e987545 100644
+--- a/.env.example
++++ b/.env.example
+@@ -27,13 +27,14 @@ CACHE_STORE=database
+ QUEUE_CONNECTION=database
+ FILESYSTEM_DISK=local
+ 
+-MAIL_MAILER=log
+-MAIL_HOST=127.0.0.1
+-MAIL_PORT=2525
++# اطلاعات واقعی ارائه‌دهنده SMTP را پیش از اجرا جایگزین کنید.
++MAIL_MAILER=smtp
++MAIL_SCHEME=smtp
++MAIL_HOST=smtp.example.com
++MAIL_PORT=587
+ MAIL_USERNAME=
+ MAIL_PASSWORD=
+-MAIL_ENCRYPTION=
+-MAIL_FROM_ADDRESS="noreply@ausbildung-match.local"
++MAIL_FROM_ADDRESS="noreply@example.com"
+ MAIL_FROM_NAME="Ausbildung Match"
+ 
+ FRONTEND_DEV_SERVER_URL=
+diff --git a/README.md b/README.md
+index 78bee2f8c7ee04d7c4e13698c5c1a929a576b1bd..78471f1201830c88dd186ef9e7e28b7248d36faa 100644
+--- a/README.md
++++ b/README.md
+@@ -21,10 +21,10 @@ Laravel 12 عمداً انتخاب شده تا با PHP 8.2.12 در XAMPP ساز
+ 
+ - جست‌وجو، فیلتر شهر/حوزه/زبان، مرتب‌سازی و صفحه‌بندی فرصت‌ها
+ - تطبیق کاربر و فرصت بر پایه زبان، تحصیلات، مهارت، تجربه، جابه‌جایی و زمان شروع
+-- ثبت‌نام، ورود، خروج، پروفایل و علاقه‌مندی‌ها با Sanctum
++- ثبت‌نام، تأیید ایمیل، ورود، بازیابی رمز، خروج، پروفایل و علاقه‌مندی‌ها با Sanctum
+ - آپلود خصوصی PDF/DOC/DOCX تا ۵ مگابایت
+ - سازنده رزومه آلمانی و خروجی PDF از پنجره چاپ مرورگر
+-- پنل `/admin` برای فرصت‌ها، دسته‌ها، منابع، کاربران و گزارش کلیک درخواست
++- پنل `/admin` با MFA اجباری برای فرصت‌ها، دسته‌ها، منابع، کاربران و گزارش کلیک درخواست
+ - ورود دسته‌ای JSON با upsert و نگهداری منبع هر رکورد
+ - منقضی‌کردن خودکار فرصت‌های قدیمی و ایمیل خلاصه هفتگی
+ - هشت فرصت نمایشی و شش دسته‌بندی برای شروع
+@@ -117,7 +117,21 @@ php artisan schedule:work
+ * * * * * cd /var/www/ausbildung-match && php artisan schedule:run >> /dev/null 2>&1
+ ```
+ 
+-برای ارسال واقعی ایمیل، `MAIL_MAILER=smtp` و مشخصات SMTP را در `.env` وارد کنید. مقدار پیش‌فرض `log` است و ایمیل را در `storage/logs/laravel.log` می‌نویسد.
++تأیید ایمیل و بازیابی رمز به ارسال ایمیل سالم وابسته‌اند. پیش از انتشار، مقادیر نمونه زیر را با مشخصات واقعی ارائه‌دهنده SMTP و دامنه خودتان جایگزین کنید:
++
++```dotenv
++APP_URL=https://your-domain.example
++MAIL_MAILER=smtp
++MAIL_SCHEME=smtp
++MAIL_HOST=smtp.your-provider.example
++MAIL_PORT=587
++MAIL_USERNAME=your-smtp-user
++MAIL_PASSWORD=your-smtp-password
++MAIL_FROM_ADDRESS=noreply@your-domain.example
++MAIL_FROM_NAME="Ausbildung Match"
++```
++
++`APP_URL` باید URL نهایی HTTPS باشد؛ لینک‌های امضاشده تأیید ایمیل و بازیابی رمز بر پایه همین مقدار ساخته می‌شوند. پس از اجرای migration، مدیر در اولین ورود به `/admin` باید TOTP را فعال و recovery codeها را در محل امن ذخیره کند.
+ 
+ ## تست و بررسی
+ 
+@@ -138,5 +152,6 @@ npm run build
+ - `APP_DEBUG=false`، رمز مدیر قوی و HTTPS را فعال کنید.
+ - پوشه‌های `storage/` و `bootstrap/cache/` باید برای کاربر وب‌سرور قابل نوشتن باشند.
+ - پس از استقرار اجرا کنید: `php artisan optimize` و `php artisan filament:optimize`.
++- پس از دریافت کد جدید اجرا کنید: `php artisan migrate --force` تا ستون‌های MFA ساخته شوند.
+ - فایل‌های رزومه روی disk خصوصی ذخیره می‌شوند و URL عمومی ندارند.
+ - Scraping کورکورانه منابع توصیه نمی‌شود؛ API/Feed رسمی یا واردسازی مجاز را برای هر منبع پیاده‌سازی کنید.
+diff --git a/app/Http/Controllers/Api/V1/AuthController.php b/app/Http/Controllers/Api/V1/AuthController.php
+index 7fce1e40691fe933972df0ec97358972588db7a6..e81bda35e9fb5c9758ebf8a4362dced7e3a403ba 100644
+--- a/app/Http/Controllers/Api/V1/AuthController.php
++++ b/app/Http/Controllers/Api/V1/AuthController.php
+@@ -3,13 +3,20 @@
+ namespace App\Http\Controllers\Api\V1;
+ 
+ use App\Http\Controllers\Controller;
++use App\Http\Requests\ForgotPasswordRequest;
+ use App\Http\Requests\LoginRequest;
+ use App\Http\Requests\RegisterRequest;
++use App\Http\Requests\ResetPasswordRequest;
+ use App\Models\User;
++use Illuminate\Auth\Events\PasswordReset;
++use Illuminate\Auth\Events\Registered;
+ use Illuminate\Http\JsonResponse;
+ use Illuminate\Http\Request;
+ use Illuminate\Support\Facades\Auth;
+ use Illuminate\Support\Facades\DB;
++use Illuminate\Support\Facades\Hash;
++use Illuminate\Support\Facades\Password;
++use Illuminate\Support\Str;
+ use Illuminate\Validation\ValidationException;
+ 
+ class AuthController extends Controller
+@@ -27,11 +34,12 @@ class AuthController extends Controller
+             return $user;
+         });
+ 
++        event(new Registered($user));
+         Auth::login($user);
+         $request->session()->regenerate();
+ 
+         return response()->json([
+-            'message' => 'حساب کاربری ساخته شد.',
++            'message' => 'حساب کاربری ساخته شد. برای ادامه، ایمیل خود را تأیید کنید.',
+             'user' => $this->payload($user),
+         ], 201);
+     }
+@@ -61,6 +69,49 @@ class AuthController extends Controller
+         ]);
+     }
+ 
++    public function forgotPassword(ForgotPasswordRequest $request): JsonResponse
++    {
++        Password::sendResetLink($request->safe()->only(['email']));
++
++        return response()->json([
++            'message' => 'اگر حسابی با این ایمیل وجود داشته باشد، لینک بازیابی ارسال می‌شود.',
++        ]);
++    }
++
++    public function resetPassword(ResetPasswordRequest $request): JsonResponse
++    {
++        $status = Password::reset(
++            $request->validated(),
++            function (User $user, string $password): void {
++                $user->forceFill([
++                    'password' => Hash::make($password),
++                    'remember_token' => Str::random(60),
++                ])->save();
++
++                event(new PasswordReset($user));
++            },
++        );
++
++        if ($status !== Password::PASSWORD_RESET) {
++            throw ValidationException::withMessages([
++                'email' => ['لینک بازیابی نامعتبر یا منقضی شده است.'],
++            ]);
++        }
++
++        return response()->json(['message' => 'رمز عبور با موفقیت تغییر کرد.']);
++    }
++
++    public function sendVerificationNotification(Request $request): JsonResponse
++    {
++        if ($request->user()->hasVerifiedEmail()) {
++            return response()->json(['message' => 'ایمیل شما قبلاً تأیید شده است.']);
++        }
++
++        $request->user()->sendEmailVerificationNotification();
++
++        return response()->json(['message' => 'لینک تأیید ایمیل دوباره ارسال شد.']);
++    }
++
+     public function logout(Request $request): JsonResponse
+     {
+         Auth::guard('web')->logout();
+@@ -78,6 +129,7 @@ class AuthController extends Controller
+             'id' => $user->id,
+             'name' => $user->name,
+             'email' => $user->email,
++            'email_verified' => $user->hasVerifiedEmail(),
+             'is_admin' => $user->is_admin,
+             'profile_completed' => $user->profile?->german_level !== 'none',
+         ];
+diff --git a/app/Http/Controllers/Api/V1/OpportunityController.php b/app/Http/Controllers/Api/V1/OpportunityController.php
+index fc2715b97128977cbb95a2ba16e46b777a96dc1a..11d07cfc2ab0040441dfecdbffbe013fa4e68707 100644
+--- a/app/Http/Controllers/Api/V1/OpportunityController.php
++++ b/app/Http/Controllers/Api/V1/OpportunityController.php
+@@ -63,6 +63,9 @@ class OpportunityController extends Controller
+         }
+ 
+         $user = $request->user();
++        if ($user && ! $user->hasVerifiedEmail()) {
++            $user = null;
++        }
+         $user?->loadMissing('profile');
+         $profile = $user?->profile;
+         $favoriteIds = $user
+@@ -109,6 +112,9 @@ class OpportunityController extends Controller
+ 
+         $opportunity->load(['category', 'source']);
+         $user = $request->user();
++        if ($user && ! $user->hasVerifiedEmail()) {
++            $user = null;
++        }
+         $user?->loadMissing('profile');
+         $favorites = $user
+             ? $user->favoriteOpportunities()->whereKey($opportunity->id)->pluck('opportunities.id')->all()
+diff --git a/app/Http/Controllers/Auth/EmailVerificationController.php b/app/Http/Controllers/Auth/EmailVerificationController.php
+new file mode 100644
+index 0000000000000000000000000000000000000000..a09caf5426b5e67ffcf65056fd79275455f60033
+--- /dev/null
++++ b/app/Http/Controllers/Auth/EmailVerificationController.php
+@@ -0,0 +1,29 @@
++<?php
++
++namespace App\Http\Controllers\Auth;
++
++use App\Http\Controllers\Controller;
++use App\Models\User;
++use Illuminate\Auth\Events\Verified;
++use Illuminate\Http\RedirectResponse;
++use Illuminate\Http\Request;
++
++class EmailVerificationController extends Controller
++{
++    public function __invoke(Request $request, string $id, string $hash): RedirectResponse
++    {
++        $user = User::query()->findOrFail($id);
++
++        abort_unless(
++            hash_equals($hash, sha1($user->getEmailForVerification())),
++            403,
++            'لینک تأیید ایمیل نامعتبر است.',
++        );
++
++        if (! $user->hasVerifiedEmail() && $user->markEmailAsVerified()) {
++            event(new Verified($user));
++        }
++
++        return redirect('/?email_verified=1');
++    }
++}
+diff --git a/app/Http/Requests/ForgotPasswordRequest.php b/app/Http/Requests/ForgotPasswordRequest.php
+new file mode 100644
+index 0000000000000000000000000000000000000000..775fdb7aa8feee100036bcbabdad67b25120aaf6
+--- /dev/null
++++ b/app/Http/Requests/ForgotPasswordRequest.php
+@@ -0,0 +1,20 @@
++<?php
++
++namespace App\Http\Requests;
++
++use Illuminate\Foundation\Http\FormRequest;
++
++class ForgotPasswordRequest extends FormRequest
++{
++    public function authorize(): bool
++    {
++        return true;
++    }
++
++    public function rules(): array
++    {
++        return [
++            'email' => ['required', 'email:rfc', 'max:190'],
++        ];
++    }
++}
+diff --git a/app/Http/Requests/ResetPasswordRequest.php b/app/Http/Requests/ResetPasswordRequest.php
+new file mode 100644
+index 0000000000000000000000000000000000000000..88549fdf039cdc222c00fe67b939bfc0a6d36411
+--- /dev/null
++++ b/app/Http/Requests/ResetPasswordRequest.php
+@@ -0,0 +1,23 @@
++<?php
++
++namespace App\Http\Requests;
++
++use Illuminate\Foundation\Http\FormRequest;
++use Illuminate\Validation\Rules\Password;
++
++class ResetPasswordRequest extends FormRequest
++{
++    public function authorize(): bool
++    {
++        return true;
++    }
++
++    public function rules(): array
++    {
++        return [
++            'token' => ['required', 'string'],
++            'email' => ['required', 'email:rfc', 'max:190'],
++            'password' => ['required', 'confirmed', Password::min(8)->letters()->numbers()],
++        ];
++    }
++}
+diff --git a/app/Models/User.php b/app/Models/User.php
+index 3960ab74d74353b8930b78b014b38cace0453721..c0fe341a763342cf9491f8f370748d8f831cfd12 100644
+--- a/app/Models/User.php
++++ b/app/Models/User.php
+@@ -2,8 +2,13 @@
+ 
+ namespace App\Models;
+ 
++use Filament\Auth\MultiFactor\App\Concerns\InteractsWithAppAuthentication;
++use Filament\Auth\MultiFactor\App\Concerns\InteractsWithAppAuthenticationRecovery;
++use Filament\Auth\MultiFactor\App\Contracts\HasAppAuthentication;
++use Filament\Auth\MultiFactor\App\Contracts\HasAppAuthenticationRecovery;
+ use Filament\Models\Contracts\FilamentUser;
+ use Filament\Panel;
++use Illuminate\Contracts\Auth\MustVerifyEmail;
+ use Illuminate\Database\Eloquent\Factories\HasFactory;
+ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+ use Illuminate\Database\Eloquent\Relations\HasMany;
+@@ -12,10 +17,12 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
+ use Illuminate\Notifications\Notifiable;
+ use Laravel\Sanctum\HasApiTokens;
+ 
+-class User extends Authenticatable implements FilamentUser
++class User extends Authenticatable implements FilamentUser, HasAppAuthentication, HasAppAuthenticationRecovery, MustVerifyEmail
+ {
+     use HasApiTokens;
+     use HasFactory;
++    use InteractsWithAppAuthentication;
++    use InteractsWithAppAuthenticationRecovery;
+     use Notifiable;
+ 
+     protected $fillable = [
+@@ -29,6 +36,8 @@ class User extends Authenticatable implements FilamentUser
+     protected $hidden = [
+         'password',
+         'remember_token',
++        'app_authentication_secret',
++        'app_authentication_recovery_codes',
+     ];
+ 
+     protected function casts(): array
+diff --git a/app/Providers/AppServiceProvider.php b/app/Providers/AppServiceProvider.php
+index bf31165dbcd7aade927b5d773165777dd4ac29f2..d44771aeac0b755bdd893c71f6dd91d617354ddd 100644
+--- a/app/Providers/AppServiceProvider.php
++++ b/app/Providers/AppServiceProvider.php
+@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
+ use Illuminate\Http\Request;
+ use Illuminate\Support\Facades\RateLimiter;
+ use Illuminate\Support\ServiceProvider;
++use Illuminate\Support\Str;
+ 
+ class AppServiceProvider extends ServiceProvider
+ {
+@@ -19,8 +20,13 @@ class AppServiceProvider extends ServiceProvider
+     {
+         Model::preventLazyLoading(! app()->isProduction());
+ 
+-        RateLimiter::for('auth', function (Request $request): Limit {
+-            return Limit::perMinute(10)->by($request->ip());
++        RateLimiter::for('auth', function (Request $request): array {
++            $email = Str::lower((string) $request->input('email'));
++
++            return [
++                Limit::perMinute(20)->by($request->ip()),
++                Limit::perMinute(5)->by($email.'|'.$request->ip()),
++            ];
+         });
+     }
+ }
+diff --git a/app/Providers/Filament/AdminPanelProvider.php b/app/Providers/Filament/AdminPanelProvider.php
+index eb4b33e800073d1c5e237132dc25b2d3733438e4..6a37d61bbbc946eb14f5512762d3cef5f2c810ef 100644
+--- a/app/Providers/Filament/AdminPanelProvider.php
++++ b/app/Providers/Filament/AdminPanelProvider.php
+@@ -2,6 +2,7 @@
+ 
+ namespace App\Providers\Filament;
+ 
++use Filament\Auth\MultiFactor\App\AppAuthentication;
+ use Filament\Http\Middleware\Authenticate;
+ use Filament\Http\Middleware\DisableBladeIconComponents;
+ use Filament\Http\Middleware\DispatchServingFilamentEvent;
+@@ -27,6 +28,13 @@ class AdminPanelProvider extends PanelProvider
+             ->id('admin')
+             ->path('admin')
+             ->login()
++            ->passwordReset()
++            ->emailVerification()
++            ->profile()
++            ->multiFactorAuthentication([
++                AppAuthentication::make()
++                    ->recoverable(),
++            ], isRequired: true)
+             ->brandName('Ausbildung Match')
+             ->colors([
+                 'primary' => Color::Blue,
+diff --git a/database/migrations/2026_09_14_000300_add_mfa_columns_to_users_table.php b/database/migrations/2026_09_14_000300_add_mfa_columns_to_users_table.php
+new file mode 100644
+index 0000000000000000000000000000000000000000..711c81ca4cc1e615f32c8f215ecd48e72534a6a3
+--- /dev/null
++++ b/database/migrations/2026_09_14_000300_add_mfa_columns_to_users_table.php
+@@ -0,0 +1,26 @@
++<?php
++
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\Schema;
++
++return new class extends Migration
++{
++    public function up(): void
++    {
++        Schema::table('users', function (Blueprint $table): void {
++            $table->text('app_authentication_secret')->nullable();
++            $table->text('app_authentication_recovery_codes')->nullable();
++        });
++    }
++
++    public function down(): void
++    {
++        Schema::table('users', function (Blueprint $table): void {
++            $table->dropColumn([
++                'app_authentication_secret',
++                'app_authentication_recovery_codes',
++            ]);
++        });
++    }
++};
+diff --git a/docs/API.md b/docs/API.md
+index 9a6129945e02815d5154a0ad732805362e1b9b21..51e82aa3ce88081ceefb1bec07e8abcdd417cb0f 100644
+--- a/docs/API.md
++++ b/docs/API.md
+@@ -11,6 +11,8 @@ Base path: `/api/v1`
+ | GET | `/opportunities/{slug}` | جزئیات یک فرصت منتشرشده |
+ | POST | `/auth/register` | ساخت حساب و شروع Session |
+ | POST | `/auth/login` | ورود کاربر |
++| POST | `/auth/forgot-password` | ارسال لینک بازیابی با پاسخ غیرقابل تشخیص برای ایمیل‌های ناشناخته |
++| POST | `/auth/reset-password` | ثبت رمز جدید با token دریافتی |
+ 
+ پارامترهای `/opportunities`: `q`, `category`, `city`, `german_level`, `international`, `sort`, `page`, `per_page`.
+ 
+@@ -22,6 +24,12 @@ Base path: `/api/v1`
+ |---|---|---|
+ | GET | `/auth/me` | کاربر جاری |
+ | POST | `/auth/logout` | خروج و ابطال Session |
++| POST | `/auth/email/verification-notification` | ارسال دوباره لینک تأیید ایمیل |
++
++## نیازمند ایمیل تأییدشده (`auth:sanctum` + `verified`)
++
++| Method | Path | کاربرد |
++|---|---|---|
+ | GET / PUT | `/profile` | دریافت و ویرایش پروفایل تطبیق |
+ | GET / POST | `/resumes` | فهرست و آپلود رزومه خصوصی |
+ | DELETE | `/resumes/{id}` | حذف رزومه متعلق به کاربر |
+diff --git a/resources/css/app.css b/resources/css/app.css
+index 1d79572858c79df071722be08320c2ab9a4e0dc3..6b68aa72922b33732d220ef238dbb91e5f7b3523 100644
+--- a/resources/css/app.css
++++ b/resources/css/app.css
+@@ -240,6 +240,8 @@ body { margin:0; color:var(--navy); background:#f5f9fd; font-family:Vazirmatn,Ta
+ button,input,select { font:inherit; }
+ button { cursor:pointer; }
+ .app-shell { min-height:100vh; overflow-x:hidden; }
++.site-notice { width:min(1160px,calc(100% - 40px)); margin:14px auto 0; padding:12px 16px; display:flex; align-items:center; justify-content:space-between; gap:16px; color:#087460; border:1px solid #bfe8dc; border-radius:14px; background:#eaf8f5; }
++.site-notice button { width:30px; height:30px; display:grid; place-items:center; color:inherit; border:0; border-radius:9px; background:rgba(8,116,96,.08); }
+ .container { width:min(1160px,calc(100% - 40px)); margin-inline:auto; }
+ .site-header { position:sticky; top:0; z-index:50; background:rgba(255,255,255,.9); border-bottom:1px solid rgba(226,235,245,.8); backdrop-filter:blur(18px); }
+ .nav-shell { min-height:76px; display:flex; align-items:center; justify-content:space-between; gap:25px; }
+@@ -257,7 +259,7 @@ button { cursor:pointer; }
+ .home-content,.page-surface { position:relative; z-index:2; margin-top:-42px; padding:30px; border-radius:34px 34px 0 0; background:#f7fafd; }.home-content{padding-bottom:95px}.page-surface{margin-bottom:100px}
+ .floating-search { min-height:84px; margin-top:-30px; padding:12px 17px; display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:12px; border:1px solid var(--line); border-radius:22px; background:white; box-shadow:var(--shadow)}.floating-search svg,.search-box svg{color:var(--blue)}.floating-search input,.search-box input{width:100%;border:0;outline:0;color:var(--navy);font-size:17px;background:transparent}.floating-search button{padding:12px 24px;color:white;border:0;border-radius:13px;background:var(--blue);font-weight:800}
+ .section-heading{margin:45px 0 20px;display:flex;align-items:end;justify-content:space-between}.section-heading span{color:var(--blue);font-size:13px}.section-heading h2{margin:4px 0 0;font-size:30px}.section-heading button,.results-head button{display:flex;align-items:center;gap:4px;color:var(--blue);border:0;background:none;font-weight:800}
+-.featured-row,.tool-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.mini-opportunity{padding:20px;display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:14px;text-align:right;border:1px solid var(--line);border-radius:20px;background:white;box-shadow:0 10px 30px rgba(29,66,109,.07)}.mini-opportunity>div{display:grid;gap:3px}.mini-opportunity span,.mini-opportunity small{color:var(--muted)}.mini-opportunity small{display:flex;align-items:center;gap:4px;margin-top:7px}.mini-opportunity small svg{width:15px}
++.featured-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}.mini-opportunity{padding:20px;display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:14px;text-align:right;border:1px solid var(--line);border-radius:20px;background:white;box-shadow:0 10px 30px rgba(29,66,109,.07)}.mini-opportunity>div{display:grid;gap:3px}.mini-opportunity span,.mini-opportunity small{color:var(--muted)}.mini-opportunity small{display:flex;align-items:center;gap:4px;margin-top:7px}.mini-opportunity small svg{width:15px}
+ .app-icon{width:58px;height:58px;display:inline-grid;place-items:center;flex:0 0 auto;color:#0877e8;border-radius:17px;background:#e4f2ff}.app-icon.purple{color:#6b2be6;background:#f0e7ff}.app-icon.amber{color:#cf7a00;background:#fff1d6}.app-icon.green{color:#109461;background:#dcf8e9}.app-icon svg{width:28px;height:28px}
+ .quick-grid{margin-top:18px;display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.quick-grid>button{padding:20px;display:grid;grid-template-columns:auto 1fr;gap:2px 13px;text-align:right;border:1px solid var(--line);border-radius:20px;background:white}.quick-grid .app-icon{grid-row:1/3}.quick-grid span{color:var(--muted);font-size:12px}
+ .profile-banner{margin-top:25px;padding:24px;display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:20px;border:1px solid #dbe7f3;border-radius:22px;background:white;box-shadow:var(--shadow)}.progress-ring,.score-ring{width:105px;height:105px;display:grid;place-items:center;border-radius:50%;font-size:24px;font-weight:900;background:radial-gradient(circle,#fff 56%,transparent 58%),conic-gradient(var(--blue) 0 75%,#e8eef5 75%)}.profile-banner h3{margin:0}.profile-banner p{margin:5px 0;color:var(--muted)}.profile-banner button{display:flex;align-items:center;gap:5px;color:var(--blue);border:0;background:none;font-weight:900}.stat-row{margin-top:22px;display:flex;justify-content:center;gap:50px;color:var(--muted)}.stat-row b{color:var(--blue);font-size:20px}
+@@ -268,7 +270,11 @@ button { cursor:pointer; }
+ .interview-card{max-width:850px;text-align:center}.interview-topic{padding:20px;display:flex;align-items:center;gap:15px;text-align:right;border-radius:20px;background:white}.interview-topic h2,.interview-topic p{margin:0}.interview-topic p{color:var(--muted)}.question-progress{margin:30px 0;display:flex;align-items:center;gap:20px}.question-progress i{height:8px;flex:1;border-radius:8px;background:#dfe7f0}.question-progress b{display:block;width:38%;height:100%;border-radius:8px;background:var(--blue)}.interview-visual{height:230px;display:grid;place-items:center;color:var(--blue);border-radius:26px;background:linear-gradient(145deg,#d9efff,#f7fbff)}.interview-visual svg{width:130px;height:130px}.mic-button{width:110px;height:110px;margin-top:-45px;display:inline-grid;place-items:center;color:white;border:10px solid #e2f2ff;border-radius:50%;background:var(--blue)}.mic-button.recording{background:#ef476f;animation:pulse 1s infinite}.mic-button svg{width:45px;height:45px}.timer{display:flex;justify-content:center;gap:5px;color:var(--muted)}
+ .application-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.application-stats>span{padding:18px;display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:18px;background:white}.application-stats b{font-size:23px}.application-flow{margin:22px 0;padding:25px;display:flex;align-items:center;justify-content:center;border-radius:20px;background:white}.application-flow i{width:70px;height:3px;background:#c7dcf1}.application-flow b{padding:12px;color:#42607d}.application-list{display:grid;gap:12px}.application-list>button{padding:16px;display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:14px;text-align:right;border:1px solid var(--line);border-radius:18px;background:white}.application-list>button>div{display:grid}.application-list span{color:var(--muted)}.status{padding:7px 11px;border-radius:20px;color:#15915d;background:#e2f8ed;font-style:normal}.status.s1{color:#b67900;background:#fff1d1}.status.s2{color:#dc3657;background:#ffe4e9}.status.s3{color:#0875e2;background:#e3f1ff}.reminder{margin-top:20px;padding:20px;display:flex;align-items:center;gap:15px;border-radius:20px;background:#e4f2ff}.reminder>svg{color:var(--blue)}.reminder div{display:grid}.reminder span{color:var(--muted)}.reminder button{margin-right:auto;padding:10px;color:var(--blue);border:1px solid #9cc9f7;border-radius:10px;background:white}
+ .bottom-nav{display:none}
++.auth-link { padding:7px; color:var(--blue); border:0; background:none; font-weight:700; }
++.resume-tool{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:20px}.resume-tool h2{margin:0}.resume-tool p{margin:5px 0 0}.resume-tool .primary-button{white-space:nowrap}
+ @keyframes pulse{50%{box-shadow:0 0 0 18px rgba(239,71,111,.12)}}
+ 
+ @media(max-width:900px){.home-hero-grid,.blue-hero-grid{grid-template-columns:1fr .5fr}.cards-grid{grid-template-columns:repeat(2,1fr)}.friendly-illustration{transform:scale(.82)}.detail-hero .compact{display:none}}
+ @media(max-width:700px){body{padding-bottom:84px}.container{width:calc(100% - 24px)}.site-header nav{position:absolute;top:68px;inset-inline:12px;display:none!important;padding:10px;flex-direction:column;align-items:stretch;border:1px solid var(--line);border-radius:16px;background:white;box-shadow:var(--shadow)}.site-header nav.mobile-open{display:flex!important}.mobile-toggle{display:grid}.nav-shell{min-height:66px}.brand-mark{width:38px;height:38px}.brand span:last-child{font-size:15px}.nav-profile{font-size:0;width:40px;padding:0}.home-hero{min-height:490px}.home-hero-grid,.blue-hero-grid{display:block;padding:54px 6px 80px}.blue-hero-grid{min-height:290px}.hero-copy h1,.blue-hero h1{font-size:34px;letter-spacing:-1px}.hero-copy p,.blue-hero p{font-size:14px;line-height:1.85}.friendly-illustration{display:none}.hero-actions{display:grid}.home-content,.page-surface{width:100%;margin-top:-32px;padding:22px 12px 35px;border-radius:30px 30px 0 0}.floating-search{grid-template-columns:auto 1fr;margin-inline:0}.floating-search button{grid-column:1/-1}.featured-row,.tool-grid,.quick-grid,.cards-grid,.result-grid{grid-template-columns:1fr}.section-heading{margin-top:35px}.profile-banner{grid-template-columns:auto 1fr}.profile-banner button{grid-column:1/-1;justify-self:center}.progress-ring{width:82px;height:82px}.stat-row{gap:12px;justify-content:space-around;font-size:11px}.stat-row span{display:grid;text-align:center}.filter-chips{display:grid;grid-template-columns:1fr 1fr}.filter-chips select,.filter-chips label{width:100%}.detail-hero{min-height:390px;padding:28px 0}.round-back,.round-save{width:45px;height:45px}.detail-title{padding-top:70px;align-items:start}.detail-title .app-icon{width:70px;height:70px}.detail-title h1{font-size:26px}.detail-title p{font-size:16px}.detail-title span{display:flex;margin:7px 0;font-size:13px}.salary-card>div{grid-template-columns:1fr}.application-stats{grid-template-columns:1fr}.application-flow{padding:15px 5px;overflow:auto;justify-content:start}.application-flow i{min-width:32px}.application-flow b{font-size:11px;white-space:nowrap}.application-list>button{grid-template-columns:auto 1fr auto}.application-list .status{grid-column:2}.reminder{align-items:flex-start}.reminder button{display:none}.bottom-nav{position:fixed;z-index:70;right:10px;left:10px;bottom:8px;height:72px;padding:6px;display:grid;grid-template-columns:repeat(5,1fr);border:1px solid rgba(218,230,243,.9);border-radius:22px;background:rgba(255,255,255,.95);box-shadow:0 12px 35px rgba(24,56,94,.2);backdrop-filter:blur(12px)}.bottom-nav button{display:grid;place-items:center;gap:1px;color:#536177;border:0;border-radius:17px;background:none;font-size:10px}.bottom-nav svg{width:22px}.bottom-nav button.active{color:white;background:var(--blue)}.cv-dialog{padding-bottom:75px}}
++
++@media(max-width:700px){.site-notice{width:calc(100% - 24px)}.resume-tool{grid-template-columns:1fr;text-align:center}.resume-tool .app-icon{margin:auto}.bottom-nav{grid-template-columns:repeat(4,1fr)}}
+diff --git a/resources/js/App.tsx b/resources/js/App.tsx
+index cbde03b7492cd83cc0b6fd6759a42566316e331c..83f9c30e9a109acb61b99ab4b02134c7c21c6858 100644
+--- a/resources/js/App.tsx
++++ b/resources/js/App.tsx
+@@ -1,5 +1,5 @@
+ import { FormEvent, ReactNode, useCallback, useEffect, useState } from "react";
+-import { ArrowLeft, BadgeEuro, Bookmark, BriefcaseBusiness, Building2, CalendarDays, Check, CheckCircle2, ChevronLeft, Clock3, FileCheck2, FileText, GraduationCap, HeartPulse, House, LayoutGrid, Lightbulb, ListChecks, LogOut, MapPin, Menu, Mic, Search, Sparkles, Stethoscope, UserRound, Wrench, X } from "lucide-react";
++import { ArrowLeft, BadgeEuro, Bookmark, BriefcaseBusiness, Building2, CalendarDays, ChevronLeft, FileCheck2, FileText, GraduationCap, HeartPulse, House, LayoutGrid, LogOut, MapPin, Menu, Search, Sparkles, Stethoscope, UserRound, Wrench, X } from "lucide-react";
+ import { api } from "./api";
+ import AuthDialog from "./components/AuthDialog";
+ import CvBuilder from "./components/CvBuilder";
+@@ -7,63 +7,204 @@ import OpportunityCard from "./components/OpportunityCard";
+ import ProfileDrawer from "./components/ProfileDrawer";
+ import type { Meta, Opportunity, OpportunityCollection, User } from "./types";
+ 
+-type View = "home" | "search" | "details" | "guide" | "eligibility" | "tools" | "interview" | "applications";
++type View = "home" | "search" | "details" | "guide" | "tools";
+ type Filters = { q: string; category: string; city: string; german_level: string; international: boolean; sort: string };
++
+ const emptyMeta: Meta = { categories: [], cities: [], german_levels: ["A2", "B1", "B2", "C1"] };
+ const initialFilters: Filters = { q: "", category: "", city: "", german_level: "", international: false, sort: "latest" };
+ const fa = new Intl.NumberFormat("fa-IR");
+ 
+-function AppIcon({ children, tone = "blue" }: { children: ReactNode; tone?: string }) { return <span className={`app-icon ${tone}`}>{children}</span>; }
++function AppIcon({ children, tone = "blue" }: { children: ReactNode; tone?: string }) {
++  return <span className={`app-icon ${tone}`}>{children}</span>;
++}
+ 
+ export default function App() {
+-  const [view, setView] = useState<View>("home"), [meta, setMeta] = useState<Meta>(emptyMeta), [filters, setFilters] = useState<Filters>(initialFilters), [searchDraft, setSearchDraft] = useState("");
+-  const [opportunities, setOpportunities] = useState<Opportunity[]>([]), [selected, setSelected] = useState<Opportunity | null>(null), [page, setPage] = useState(1), [lastPage, setLastPage] = useState(1), [total, setTotal] = useState(0);
+-  const [loading, setLoading] = useState(true), [error, setError] = useState(""), [user, setUser] = useState<User | null>(null), [authOpen, setAuthOpen] = useState(false), [profileOpen, setProfileOpen] = useState(false), [cvOpen, setCvOpen] = useState(false), [mobileMenu, setMobileMenu] = useState(false), [favoritesOnly, setFavoritesOnly] = useState(false), [eligibilityDone, setEligibilityDone] = useState(false), [interviewing, setInterviewing] = useState(false);
++  const resetMatch = window.location.pathname.match(/^\/reset-password\/([^/]+)$/);
++  const resetToken = resetMatch ? decodeURIComponent(resetMatch[1]) : null;
++  const resetEmail = new URLSearchParams(window.location.search).get("email") || "";
++  const verificationComplete = new URLSearchParams(window.location.search).get("email_verified") === "1";
++
++  const [view, setView] = useState<View>("home");
++  const [meta, setMeta] = useState<Meta>(emptyMeta);
++  const [filters, setFilters] = useState<Filters>(initialFilters);
++  const [searchDraft, setSearchDraft] = useState("");
++  const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
++  const [selected, setSelected] = useState<Opportunity | null>(null);
++  const [page, setPage] = useState(1);
++  const [lastPage, setLastPage] = useState(1);
++  const [total, setTotal] = useState(0);
++  const [loading, setLoading] = useState(true);
++  const [error, setError] = useState("");
++  const [user, setUser] = useState<User | null>(null);
++  const [authOpen, setAuthOpen] = useState(Boolean(resetToken));
++  const [profileOpen, setProfileOpen] = useState(false);
++  const [cvOpen, setCvOpen] = useState(false);
++  const [mobileMenu, setMobileMenu] = useState(false);
++  const [favoritesOnly, setFavoritesOnly] = useState(false);
++  const [notice, setNotice] = useState(verificationComplete ? "ایمیل شما با موفقیت تأیید شد. اکنون می‌توانید از همه امکانات حساب استفاده کنید." : "");
+ 
+   const loadOpportunities = useCallback(async () => {
+-    setLoading(true); setError("");
++    setLoading(true);
++    setError("");
+     try {
+       let response: OpportunityCollection;
+-      if (favoritesOnly && user) response = await api<OpportunityCollection>(`/favorites?page=${page}`);
+-      else { const params = new URLSearchParams({ page: String(page), per_page: "12", sort: filters.sort }); Object.entries(filters).forEach(([k,v]) => { if (v && !["sort","international"].includes(k)) params.set(k, String(v).toLowerCase()); }); if (filters.international) params.set("international", "1"); response = await api<OpportunityCollection>(`/opportunities?${params}`); }
+-      setOpportunities(response.data); setLastPage(response.meta.last_page); setTotal(response.meta.total);
+-    } catch { setError("دریافت فرصت‌ها ممکن نشد. اتصال سرور و دیتابیس را بررسی کنید."); } finally { setLoading(false); }
++      if (favoritesOnly && user?.email_verified) {
++        response = await api<OpportunityCollection>(`/favorites?page=${page}`);
++      } else {
++        const params = new URLSearchParams({ page: String(page), per_page: "12", sort: filters.sort });
++        Object.entries(filters).forEach(([key, value]) => {
++          if (value && !["sort", "international"].includes(key)) params.set(key, String(value).toLowerCase());
++        });
++        if (filters.international) params.set("international", "1");
++        response = await api<OpportunityCollection>(`/opportunities?${params}`);
++      }
++      setOpportunities(response.data);
++      setLastPage(response.meta.last_page);
++      setTotal(response.meta.total);
++    } catch {
++      setError("دریافت فرصت‌ها ممکن نشد. اتصال سرور و دیتابیس را بررسی کنید.");
++    } finally {
++      setLoading(false);
++    }
+   }, [favoritesOnly, filters, page, user]);
+-  useEffect(() => { api<Meta>("/meta").then(setMeta).catch(() => undefined); api<{ user: User }>("/auth/me").then(r => setUser(r.user)).catch(() => setUser(null)); }, []);
+-  useEffect(() => { void loadOpportunities(); }, [loadOpportunities]); useEffect(() => { window.scrollTo({ top: 0, behavior: "smooth" }); }, [view]);
+-  const navigate = (next: View) => { setView(next); setMobileMenu(false); };
+-  function setFilter<K extends keyof Filters>(key: K, value: Filters[K]) { setPage(1); setFavoritesOnly(false); setFilters(c => ({ ...c, [key]: value })); }
+-  function submitSearch(e: FormEvent) { e.preventDefault(); setFilter("q", searchDraft.trim()); navigate("search"); }
+-  async function toggleFavorite(o: Opportunity) { if (!user) { setAuthOpen(true); return; } setOpportunities(a => a.map(x => x.id === o.id ? {...x,is_favorite:!x.is_favorite}:x)); try { await api(`/favorites/${o.slug}`, { method: o.is_favorite ? "DELETE" : "PUT" }); } catch { setOpportunities(a => a.map(x => x.id === o.id ? {...x,is_favorite:o.is_favorite}:x)); } }
+-  function apply(o: Opportunity) { window.open(o.application_url, "_blank", "noopener,noreferrer"); if (user) void api(`/application-clicks/${o.slug}`, { method:"POST", body:JSON.stringify({channel:"application_url"}) }).catch(() => undefined); }
+-  const openDetails = (o: Opportunity) => { setSelected(o); navigate("details"); };
+-  const featured = opportunities[0], activeFilterCount = [filters.category, filters.city, filters.german_level, filters.international].filter(Boolean).length;
+-  const navItems: Array<[View,string]> = [["search","فرصت‌ها"],["guide","راهنمای رشته‌ها"],["eligibility","بررسی شرایط"],["tools","ابزارها"]];
+-  return <div className="app-shell" dir="rtl"><header className="site-header"><div className="container nav-shell"><button className="brand" onClick={() => navigate("home")}><span className="brand-mark"><BriefcaseBusiness/></span><span><strong>Ausbildung</strong><b>Match</b></span></button><nav className={mobileMenu ? "mobile-open":""}>{navItems.map(([k,l]) => <button key={k} className={view===k?"active":""} onClick={() => navigate(k)}>{l}</button>)}</nav><div className="nav-actions">{user ? <><button className="nav-profile" onClick={() => setProfileOpen(true)}><UserRound size={18}/>{user.name.split(" ")[0]}</button><button className="icon-button" onClick={async()=>{await api("/auth/logout",{method:"POST"});setUser(null);}}><LogOut size={18}/></button></>:<button className="login-button" onClick={()=>setAuthOpen(true)}>ورود / ثبت‌نام</button>}<button className="mobile-toggle" onClick={()=>setMobileMenu(!mobileMenu)}>{mobileMenu?<X/>:<Menu/>}</button></div></div></header><main>
+-  {view==="home"&&<Home total={total} meta={meta} featured={featured} searchDraft={searchDraft} setSearchDraft={setSearchDraft} submitSearch={submitSearch} navigate={navigate} openDetails={openDetails}/>}
+-  {view==="search"&&<SearchPage opportunities={opportunities} loading={loading} error={error} filters={filters} meta={meta} activeFilterCount={activeFilterCount} setFilter={setFilter} toggleFavorite={toggleFavorite} apply={apply} openDetails={openDetails} favoritesOnly={favoritesOnly} setFavoritesOnly={setFavoritesOnly} total={total} page={page} lastPage={lastPage} setPage={setPage} reload={loadOpportunities}/>}
+-  {view==="details"&&<DetailsPage opportunity={selected||featured} onBack={()=>navigate("search")} onFavorite={toggleFavorite} onApply={apply}/>}
+-  {view==="guide"&&<GuidePage navigate={navigate}/>} {view==="eligibility"&&<EligibilityPage done={eligibilityDone} setDone={setEligibilityDone} navigate={navigate}/>} {view==="tools"&&<ToolsPage openCv={()=>user?setCvOpen(true):setAuthOpen(true)} navigate={navigate}/>} {view==="interview"&&<InterviewPage active={interviewing} setActive={setInterviewing}/>} {view==="applications"&&<ApplicationsPage opportunities={opportunities.slice(0,4)} openDetails={openDetails}/>}</main><BottomNav view={view} navigate={navigate} openProfile={()=>user?setProfileOpen(true):setAuthOpen(true)}/>
+-  {authOpen&&<AuthDialog onClose={()=>setAuthOpen(false)} onSuccess={u=>{setUser(u);setAuthOpen(false);}}/>}{profileOpen&&<ProfileDrawer meta={meta} onClose={()=>setProfileOpen(false)} onSaved={()=>api<{user:User}>("/auth/me").then(r=>setUser(r.user))}/>} {cvOpen&&user&&<CvBuilder user={user} onClose={()=>setCvOpen(false)}/>}</div>;
++
++  useEffect(() => {
++    api<Meta>("/meta").then(setMeta).catch(() => undefined);
++    api<{ user: User }>("/auth/me").then((response) => setUser(response.user)).catch(() => setUser(null));
++
++    if (verificationComplete) {
++      const url = new URL(window.location.href);
++      url.searchParams.delete("email_verified");
++      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
++    }
++  }, []);
++
++  useEffect(() => { void loadOpportunities(); }, [loadOpportunities]);
++  useEffect(() => { window.scrollTo({ top: 0, behavior: "smooth" }); }, [view]);
++
++  function navigate(next: View) {
++    setView(next);
++    setMobileMenu(false);
++  }
++
++  function setFilter<K extends keyof Filters>(key: K, value: Filters[K]) {
++    setPage(1);
++    setFavoritesOnly(false);
++    setFilters((current) => ({ ...current, [key]: value }));
++  }
++
++  function submitSearch(event: FormEvent) {
++    event.preventDefault();
++    setFilter("q", searchDraft.trim());
++    navigate("search");
++  }
++
++  function requireVerified(action: () => void) {
++    if (!user?.email_verified) {
++      setAuthOpen(true);
++      return;
++    }
++    action();
++  }
++
++  async function toggleFavorite(opportunity: Opportunity) {
++    if (!user?.email_verified) {
++      setAuthOpen(true);
++      return;
++    }
++    setOpportunities((current) => current.map((item) => item.id === opportunity.id ? { ...item, is_favorite: !item.is_favorite } : item));
++    try {
++      await api(`/favorites/${opportunity.slug}`, { method: opportunity.is_favorite ? "DELETE" : "PUT" });
++    } catch {
++      setOpportunities((current) => current.map((item) => item.id === opportunity.id ? { ...item, is_favorite: opportunity.is_favorite } : item));
++    }
++  }
++
++  function apply(opportunity: Opportunity) {
++    window.open(opportunity.application_url, "_blank", "noopener,noreferrer");
++    if (user?.email_verified) {
++      void api(`/application-clicks/${opportunity.slug}`, { method: "POST", body: JSON.stringify({ channel: "application_url" }) }).catch(() => undefined);
++    }
++  }
++
++  function closeAuth() {
++    setAuthOpen(false);
++    if (window.location.pathname.startsWith("/reset-password/")) window.history.replaceState({}, "", "/");
++  }
++
++  const openDetails = (opportunity: Opportunity) => {
++    setSelected(opportunity);
++    navigate("details");
++  };
++  const featured = opportunities.slice(0, 2);
++  const activeFilterCount = [filters.category, filters.city, filters.german_level, filters.international].filter(Boolean).length;
++  const navItems: Array<[View, string]> = [["search", "فرصت‌ها"], ["guide", "راهنمای رشته‌ها"], ["tools", "ابزار رزومه"]];
++
++  return (
++    <div className="app-shell" dir="rtl">
++      <header className="site-header">
++        <div className="container nav-shell">
++          <button className="brand" onClick={() => navigate("home")}><span className="brand-mark"><BriefcaseBusiness /></span><span><strong>Ausbildung</strong><b>Match</b></span></button>
++          <nav className={mobileMenu ? "mobile-open" : ""}>{navItems.map(([key, label]) => <button key={key} className={view === key ? "active" : ""} onClick={() => navigate(key)}>{label}</button>)}</nav>
++          <div className="nav-actions">
++            {user ? (
++              <>
++                <button className="nav-profile" onClick={() => requireVerified(() => setProfileOpen(true))}><UserRound size={18} />{user.name.split(" ")[0]}</button>
++                <button className="icon-button" aria-label="خروج" onClick={async () => { await api("/auth/logout", { method: "POST" }); setUser(null); }}><LogOut size={18} /></button>
++              </>
++            ) : <button className="login-button" onClick={() => setAuthOpen(true)}>ورود / ثبت‌نام</button>}
++            <button className="mobile-toggle" aria-label="منو" onClick={() => setMobileMenu(!mobileMenu)}>{mobileMenu ? <X /> : <Menu />}</button>
++          </div>
++        </div>
++      </header>
++
++      {notice && <div className="site-notice" role="status">{notice}<button type="button" onClick={() => setNotice("")} aria-label="بستن"><X size={16} /></button></div>}
++
++      <main>
++        {view === "home" && <Home total={total} meta={meta} featured={featured} searchDraft={searchDraft} setSearchDraft={setSearchDraft} submitSearch={submitSearch} navigate={navigate} openDetails={openDetails} />}
++        {view === "search" && <SearchPage opportunities={opportunities} loading={loading} error={error} filters={filters} meta={meta} activeFilterCount={activeFilterCount} setFilter={setFilter} toggleFavorite={toggleFavorite} apply={apply} openDetails={openDetails} favoritesOnly={favoritesOnly} setFavoritesOnly={setFavoritesOnly} total={total} page={page} lastPage={lastPage} setPage={setPage} reload={loadOpportunities} />}
++        {view === "details" && <DetailsPage opportunity={selected || featured[0]} onBack={() => navigate("search")} onFavorite={toggleFavorite} onApply={apply} />}
++        {view === "guide" && <GuidePage navigate={navigate} />}
++        {view === "tools" && <ToolsPage openCv={() => requireVerified(() => setCvOpen(true))} />}
++      </main>
++
++      <BottomNav view={view} navigate={navigate} openProfile={() => requireVerified(() => setProfileOpen(true))} />
++      {authOpen && <AuthDialog user={user} resetToken={resetToken} resetEmail={resetEmail} onClose={closeAuth} onSuccess={setUser} />}
++      {profileOpen && <ProfileDrawer meta={meta} onClose={() => setProfileOpen(false)} onSaved={() => api<{ user: User }>("/auth/me").then((response) => setUser(response.user))} />}
++      {cvOpen && user?.email_verified && <CvBuilder user={user} onClose={() => setCvOpen(false)} />}
++    </div>
++  );
+ }
+ 
+-function BlueHero({eyebrow,title,text,icon}:{eyebrow:string;title:string;text:string;icon:ReactNode}) { return <section className="blue-hero"><div className="hero-blob one"/><div className="hero-blob two"/><div className="container blue-hero-grid"><div><span className="hero-eyebrow">{eyebrow}</span><h1>{title}</h1><p>{text}</p></div><div className="friendly-illustration"><span className="spark">✦</span><div className="illustration-orbit">{icon}</div><b>آینده روشن‌تر<br/>برای تو</b></div></div></section>; }
++function BlueHero({ eyebrow, title, text, icon }: { eyebrow: string; title: string; text: string; icon: ReactNode }) {
++  return <section className="blue-hero"><div className="hero-blob one" /><div className="hero-blob two" /><div className="container blue-hero-grid"><div><span className="hero-eyebrow">{eyebrow}</span><h1>{title}</h1><p>{text}</p></div><div className="friendly-illustration"><span className="spark">✦</span><div className="illustration-orbit">{icon}</div><b>آینده روشن‌تر<br />برای تو</b></div></div></section>;
++}
+ 
+-function Home({total,meta,featured,searchDraft,setSearchDraft,submitSearch,navigate,openDetails}:any) { return <><section className="home-hero"><div className="hero-blob one"/><div className="hero-blob two"/><div className="container home-hero-grid"><div className="hero-copy"><span className="hero-eyebrow"><Sparkles size={17}/> آینده شغلی تو از اینجا شروع می‌شود</span><h1>سلام، آماده‌ای مسیر حرفه‌ای‌ات را در آلمان بسازی؟</h1><p>فرصت‌های معتبر آوسبیلدونگ را پیدا کن، شرایطت را بسنج و با ابزارهای حرفه‌ای برای درخواست آماده شو.</p><div className="hero-actions"><button className="primary-button" onClick={()=>navigate("search")}><Search/> جست‌وجوی آوسبیلدونگ</button><button className="outline-light" onClick={()=>navigate("eligibility")}><ListChecks/> بررسی شرایط من</button></div></div><div className="friendly-illustration large"><span className="spark">✦</span><div className="illustration-orbit"><GraduationCap/></div><b>تو می‌تونی!</b></div></div></section><section className="home-content container"><form className="floating-search" onSubmit={submitSearch}><Search/><input value={searchDraft} onChange={(e:any)=>setSearchDraft(e.target.value)} placeholder="رشته، شهر یا شرکت"/><button>جست‌وجو</button></form><SectionHeading title="فرصت‌های تازه" action={()=>navigate("search")}/>{featured&&<div className="featured-row"><MiniOpportunity item={featured} onClick={()=>openDetails(featured)}/><MiniOpportunity item={{...featured,id:-1,title_fa:"آوسبیلدونگ فناوری اطلاعات",title_de:"Fachinformatiker/in",city:"مونیخ"}} onClick={()=>navigate("search")}/></div>}<div className="quick-grid"><Quick icon={<HeartPulse/>} title="پرستاری" text="معرفی رشته و مسیر شغلی" onClick={()=>navigate("guide")}/><Quick icon={<FileText/>} title="فناوری اطلاعات" text="فرصت‌های محبوب این هفته" onClick={()=>navigate("search")}/><Quick icon={<Wrench/>} title="ابزارهای درخواست" text="رزومه و انگیزه‌نامه" onClick={()=>navigate("tools")}/></div><div className="profile-banner"><div className="progress-ring">۷۵٪</div><div><h3>پروفایلت را کامل کن</h3><p>با تکمیل اطلاعات، پیشنهادهای دقیق‌تری دریافت می‌کنی.</p></div><button onClick={()=>navigate("eligibility")}>ادامه مسیر <ArrowLeft/></button></div><div className="stat-row"><span><b>{fa.format(total)}</b> فرصت فعال</span><span><b>{fa.format(meta.cities.length)}</b> شهر</span><span><b>{fa.format(meta.categories.length)}</b> حوزه شغلی</span></div></section></>; }
+-function SectionHeading({title,action}:any){return <div className="section-heading"><div><span>پیشنهادهای مناسب تو</span><h2>{title}</h2></div><button onClick={action}>مشاهده همه <ChevronLeft/></button></div>};
+-function MiniOpportunity({item,onClick}:{item:Opportunity;onClick:()=>void}) { return <button className="mini-opportunity" onClick={onClick}><AppIcon><Building2/></AppIcon><div><b>{item.title_fa}</b><span dir="ltr">{item.title_de}</span><small><MapPin/> {item.city} · زبان {item.required_german_level}</small></div><ChevronLeft/></button>; }
+-function Quick({icon,title,text,onClick}:any){return <button onClick={onClick}><AppIcon>{icon}</AppIcon><b>{title}</b><span>{text}</span></button>}
++function Home({ total, meta, featured, searchDraft, setSearchDraft, submitSearch, navigate, openDetails }: any) {
++  return <><section className="home-hero"><div className="hero-blob one" /><div className="hero-blob two" /><div className="container home-hero-grid"><div className="hero-copy"><span className="hero-eyebrow"><Sparkles size={17} /> آینده شغلی تو از اینجا شروع می‌شود</span><h1>مسیر حرفه‌ای‌ات را در آلمان بساز</h1><p>فرصت‌های منتشرشده آوسبیلدونگ را جست‌وجو کن و رزومه آلمانی خودت را برای درخواست آماده کن.</p><div className="hero-actions"><button className="primary-button" onClick={() => navigate("search")}><Search /> جست‌وجوی آوسبیلدونگ</button><button className="outline-light" onClick={() => navigate("tools")}><FileText /> ساخت رزومه آلمانی</button></div></div><div className="friendly-illustration large"><span className="spark">✦</span><div className="illustration-orbit"><GraduationCap /></div><b>تو می‌تونی!</b></div></div></section><section className="home-content container"><form className="floating-search" onSubmit={submitSearch}><Search /><input value={searchDraft} onChange={(event: any) => setSearchDraft(event.target.value)} placeholder="رشته، شهر یا شرکت" /><button>جست‌وجو</button></form><SectionHeading title="فرصت‌های تازه" action={() => navigate("search")} />{featured.length > 0 && <div className="featured-row">{featured.map((item: Opportunity) => <MiniOpportunity key={item.id} item={item} onClick={() => openDetails(item)} />)}</div>}<div className="quick-grid"><Quick icon={<HeartPulse />} title="راهنمای پرستاری" text="معرفی رشته و مسیر شغلی" onClick={() => navigate("guide")} /><Quick icon={<Search />} title="جست‌وجوی فرصت‌ها" text="فیلتر بر اساس شهر، زبان و رشته" onClick={() => navigate("search")} /><Quick icon={<Wrench />} title="سازنده رزومه" text="رزومه آلمانی و خروجی PDF" onClick={() => navigate("tools")} /></div><div className="stat-row"><span><b>{fa.format(total)}</b> فرصت فعال</span><span><b>{fa.format(meta.cities.length)}</b> شهر</span><span><b>{fa.format(meta.categories.length)}</b> حوزه شغلی</span></div></section></>;
++}
++
++function SectionHeading({ title, action }: any) { return <div className="section-heading"><div><span>تازه‌ترین موارد ثبت‌شده</span><h2>{title}</h2></div><button onClick={action}>مشاهده همه <ChevronLeft /></button></div>; }
++function MiniOpportunity({ item, onClick }: { item: Opportunity; onClick: () => void }) { return <button className="mini-opportunity" onClick={onClick}><AppIcon><Building2 /></AppIcon><div><b>{item.title_fa}</b><span dir="ltr">{item.title_de}</span><small><MapPin /> {item.city} · زبان {item.required_german_level}</small></div><ChevronLeft /></button>; }
++function Quick({ icon, title, text, onClick }: any) { return <button onClick={onClick}><AppIcon>{icon}</AppIcon><b>{title}</b><span>{text}</span></button>; }
+ 
+-function SearchPage(p:any) { return <><BlueHero eyebrow="فرصت مناسب همین نزدیکی‌ست" title="جست‌وجوی فرصت‌ها" text="آوسبیلدونگ یا کار رویایی‌ات را در آلمان پیدا کن." icon={<Search/>}/><section className="page-surface container search-surface"><div className="search-box"><Search/><input value={p.filters.q} onChange={(e)=>p.setFilter("q",e.target.value)} placeholder="عنوان رشته یا شغل"/></div><div className="mode-tabs"><button className="active"><GraduationCap/> آوسبیلدونگ</button><button><BriefcaseBusiness/> کار</button></div>{!p.favoritesOnly&&<div className="filter-chips"><select value={p.filters.city} onChange={(e)=>p.setFilter("city",e.target.value)}><option value="">همه شهرها</option>{p.meta.cities.map((x:string)=><option key={x}>{x}</option>)}</select><select value={p.filters.german_level} onChange={(e)=>p.setFilter("german_level",e.target.value)}><option value="">سطح زبان</option>{p.meta.german_levels.map((x:string)=><option key={x}>{x}</option>)}</select><select value={p.filters.category} onChange={(e)=>p.setFilter("category",e.target.value)}><option value="">همه رشته‌ها</option>{p.meta.categories.map((x:any)=><option key={x.id} value={x.slug}>{x.name_fa}</option>)}</select><label><input type="checkbox" checked={p.filters.international} onChange={(e)=>p.setFilter("international",e.target.checked)}/> پذیرش بین‌المللی</label></div>}<div className="results-head"><h2>{p.favoritesOnly?"ذخیره‌شده‌ها":`${fa.format(p.total)} نتیجه پیدا شد`}</h2></div>{p.loading?<div className="cards-grid">{[1,2,3].map(x=><div className="skeleton-card" key={x}/>)}</div>:p.error?<div className="empty-state"><p>{p.error}</p><button onClick={p.reload}>تلاش دوباره</button></div>:<div className="cards-grid">{p.opportunities.map((item:Opportunity)=><div className="card-wrap" key={item.id}><OpportunityCard opportunity={item} onFavorite={p.toggleFavorite} onApply={p.apply}/><button className="card-detail-link" onClick={()=>p.openDetails(item)}>مشاهده جزئیات کامل <ChevronLeft/></button></div>)}</div>}{p.lastPage>1&&<div className="pagination"><button disabled={p.page<=1} onClick={()=>p.setPage(p.page-1)}>قبلی</button><span>{fa.format(p.page)} از {fa.format(p.lastPage)}</span><button disabled={p.page>=p.lastPage} onClick={()=>p.setPage(p.page+1)}>بعدی</button></div>}</section></>; }
++function SearchPage(props: any) {
++  return <><BlueHero eyebrow="فرصت مناسب همین نزدیکی‌ست" title="جست‌وجوی فرصت‌های آوسبیلدونگ" text="فرصت‌ها را بر اساس رشته، شهر و شرایط خودت پیدا کن." icon={<Search />} /><section className="page-surface container search-surface"><div className="search-box"><Search /><input value={props.filters.q} onChange={(event) => props.setFilter("q", event.target.value)} placeholder="عنوان رشته یا آوسبیلدونگ" /></div>{!props.favoritesOnly && <div className="filter-chips"><select value={props.filters.city} onChange={(event) => props.setFilter("city", event.target.value)}><option value="">همه شهرها</option>{props.meta.cities.map((city: string) => <option key={city}>{city}</option>)}</select><select value={props.filters.german_level} onChange={(event) => props.setFilter("german_level", event.target.value)}><option value="">سطح زبان</option>{props.meta.german_levels.map((level: string) => <option key={level}>{level}</option>)}</select><select value={props.filters.category} onChange={(event) => props.setFilter("category", event.target.value)}><option value="">همه رشته‌ها</option>{props.meta.categories.map((category: any) => <option key={category.id} value={category.slug}>{category.name_fa}</option>)}</select><label><input type="checkbox" checked={props.filters.international} onChange={(event) => props.setFilter("international", event.target.checked)} /> پذیرش بین‌المللی</label></div>}<div className="results-head"><h2>{props.favoritesOnly ? "ذخیره‌شده‌ها" : `${fa.format(props.total)} نتیجه پیدا شد`}</h2></div>{props.loading ? <div className="cards-grid">{[1, 2, 3].map((item) => <div className="skeleton-card" key={item} />)}</div> : props.error ? <div className="empty-state"><p>{props.error}</p><button onClick={props.reload}>تلاش دوباره</button></div> : <div className="cards-grid">{props.opportunities.map((item: Opportunity) => <div className="card-wrap" key={item.id}><OpportunityCard opportunity={item} onFavorite={props.toggleFavorite} onApply={props.apply} /><button className="card-detail-link" onClick={() => props.openDetails(item)}>مشاهده جزئیات کامل <ChevronLeft /></button></div>)}</div>}{props.lastPage > 1 && <div className="pagination"><button disabled={props.page <= 1} onClick={() => props.setPage(props.page - 1)}>قبلی</button><span>{fa.format(props.page)} از {fa.format(props.lastPage)}</span><button disabled={props.page >= props.lastPage} onClick={() => props.setPage(props.page + 1)}>بعدی</button></div>}</section></>;
++}
+ 
+-function DetailsPage({opportunity,onBack,onFavorite,onApply}:any) { if(!opportunity)return <div className="empty-state container">فرصتی انتخاب نشده است.</div>; return <><section className="detail-hero"><div className="container"><button className="round-back" onClick={onBack}><ArrowLeft/></button><button className="round-save" onClick={()=>onFavorite(opportunity)}><Bookmark fill={opportunity.is_favorite?"currentColor":"none"}/></button><div className="detail-title"><AppIcon><HeartPulse/></AppIcon><div><h1 dir="ltr">{opportunity.title_de}</h1><p>{opportunity.employer_name}</p><span><MapPin/> {opportunity.city} · حضوری</span><span><CalendarDays/> شروع: {opportunity.start_date||"توافقی"}</span><span><BadgeEuro/> {opportunity.monthly_salary_from?`${fa.format(opportunity.monthly_salary_from)} €`:"حقوق توافقی"}</span></div></div><div className="friendly-illustration compact"><Stethoscope/></div></div></section><section className="page-surface container detail-content"><article className="content-card"><h2>درباره دوره</h2><p>{opportunity.description_fa}</p></article><article className="content-card"><h2>شرایط موردنیاز</h2><ul className="check-list"><li>زبان آلمانی {opportunity.required_german_level}</li><li>{opportunity.education_requirement||"مدرک تحصیلی مرتبط"}</li><li>علاقه به کار تیمی و یادگیری</li></ul></article><article className="content-card"><h2>مهارت‌های پیشنهادی</h2><div className="tag-list">{opportunity.skills.map((x:string)=><span key={x}>{x}</span>)}</div></article><button className="primary-button wide-action" onClick={()=>onApply(opportunity)}>ارسال درخواست <ArrowLeft/></button></section></>; }
++function DetailsPage({ opportunity, onBack, onFavorite, onApply }: any) {
++  if (!opportunity) return <div className="empty-state container">فرصتی انتخاب نشده است.</div>;
++  return <><section className="detail-hero"><div className="container"><button className="round-back" onClick={onBack}><ArrowLeft /></button><button className="round-save" onClick={() => onFavorite(opportunity)}><Bookmark fill={opportunity.is_favorite ? "currentColor" : "none"} /></button><div className="detail-title"><AppIcon><HeartPulse /></AppIcon><div><h1 dir="ltr">{opportunity.title_de}</h1><p>{opportunity.employer_name}</p><span><MapPin /> {opportunity.city} · حضوری</span><span><CalendarDays /> شروع: {opportunity.start_date || "توافقی"}</span><span><BadgeEuro /> {opportunity.monthly_salary_from ? `${fa.format(opportunity.monthly_salary_from)} €` : "حقوق توافقی"}</span></div></div><div className="friendly-illustration compact"><Stethoscope /></div></div></section><section className="page-surface container detail-content"><article className="content-card"><h2>درباره دوره</h2><p>{opportunity.description_fa}</p></article><article className="content-card"><h2>شرایط موردنیاز</h2><ul className="check-list"><li>زبان آلمانی {opportunity.required_german_level}</li><li>{opportunity.education_requirement || "مدرک تحصیلی مرتبط"}</li><li>علاقه به کار تیمی و یادگیری</li></ul></article><article className="content-card"><h2>مهارت‌های پیشنهادی</h2><div className="tag-list">{opportunity.skills.map((skill: string) => <span key={skill}>{skill}</span>)}</div></article><button className="primary-button wide-action" onClick={() => onApply(opportunity)}>ارسال درخواست <ArrowLeft /></button></section></>;
++}
+ 
+-function Feature({icon,title,text}:any){return <div className="feature-line"><AppIcon>{icon}</AppIcon><div><b>{title}</b><span>{text}</span></div></div>}
+-function GuidePage({navigate}:any){return <><BlueHero eyebrow="معرفی رشته" title="Pflegefachkraft — پرستاری" text="سه سال آموزش دوآل، تجربه واقعی و آینده شغلی روشن در آلمان." icon={<Stethoscope/>}/><section className="page-surface container guide-grid"><article className="content-card salary-card"><h2>حقوق ماهانه در طول دوره</h2><div><span>سال اول <b>۱٬۳۴۰ €</b></span><span>سال دوم <b>۱٬۴۰۲ €</b></span><span>سال سوم <b>۱٬۵۰۳ €</b></span></div></article><article className="content-card"><h2>چه کارهایی انجام می‌دهی؟</h2><Feature icon={<HeartPulse/>} title="مراقبت و حمایت از بیماران" text="کمک در فعالیت‌های روزمره و حفظ سلامت"/><Feature icon={<FileCheck2/>} title="مستندسازی و برنامه‌ریزی" text="ثبت وضعیت بیماران و همکاری با تیم درمان"/><Feature icon={<UserRound/>} title="ارتباط با بیماران و خانواده‌ها" text="ایجاد رابطه‌ای با اعتماد و حمایت روحی"/></article><article className="content-card future-card"><AppIcon><LayoutGrid/></AppIcon><div><h2>آینده شغلی</h2><p>تقاضا برای پرستار در آلمان بالاست و فرصت‌ها رو به افزایش است.</p></div></article><button className="primary-button wide-action" onClick={()=>navigate("search")}>مشاهده فرصت‌ها <ArrowLeft/></button></section></>}
++function Feature({ icon, title, text }: any) { return <div className="feature-line"><AppIcon>{icon}</AppIcon><div><b>{title}</b><span>{text}</span></div></div>; }
++function GuidePage({ navigate }: any) { return <><BlueHero eyebrow="معرفی رشته" title="Pflegefachkraft — پرستاری" text="سه سال آموزش دوآل، تجربه واقعی و آینده شغلی روشن در آلمان." icon={<Stethoscope />} /><section className="page-surface container guide-grid"><article className="content-card salary-card"><h2>حقوق ماهانه در طول دوره</h2><div><span>سال اول <b>۱٬۳۴۰ €</b></span><span>سال دوم <b>۱٬۴۰۲ €</b></span><span>سال سوم <b>۱٬۵۰۳ €</b></span></div></article><article className="content-card"><h2>چه کارهایی انجام می‌دهی؟</h2><Feature icon={<HeartPulse />} title="مراقبت و حمایت از بیماران" text="کمک در فعالیت‌های روزمره و حفظ سلامت" /><Feature icon={<FileCheck2 />} title="مستندسازی و برنامه‌ریزی" text="ثبت وضعیت بیماران و همکاری با تیم درمان" /><Feature icon={<UserRound />} title="ارتباط با بیماران و خانواده‌ها" text="ایجاد رابطه‌ای با اعتماد و حمایت روحی" /></article><article className="content-card future-card"><AppIcon><LayoutGrid /></AppIcon><div><h2>آینده شغلی</h2><p>تقاضا برای پرستار در آلمان بالاست و فرصت‌ها رو به افزایش است.</p></div></article><button className="primary-button wide-action" onClick={() => navigate("search")}>مشاهده فرصت‌ها <ArrowLeft /></button></section></>; }
+ 
+-function EligibilityPage({done,setDone,navigate}:any){return <><BlueHero eyebrow="چهار قدم کوتاه" title="بررسی شرایط من" text="در چند دقیقه ببین چقدر برای شروع آوسبیلدونگ آماده‌ای." icon={<ListChecks/>}/><section className="page-surface container eligibility-card">{done?<><div className="result-grid"><div><h2>نتیجه ارزیابی</h2><p>شانس مناسبی برای اقدام داری</p><div className="score-ring">۷۸٪</div></div><div className="result-visual"><CheckCircle2/><b>شما در مسیر درستی هستید!</b></div></div><ul className="result-list"><li><Check/> سن و مدرک تحصیلی مناسب</li><li><Check/> سابقه مرتبط</li><li className="warning">! سطح فعلی زبان: B1</li></ul><div className="tip-box"><Lightbulb/><div><b>برای این رشته B2 پیشنهاد می‌شود</b><span>با تقویت زبان، شانس دریافت پیشنهادت بیشتر می‌شود.</span></div></div><button className="primary-button wide-action" onClick={()=>navigate("search")}>مشاهده فرصت‌های مناسب</button><button className="secondary-button wide-action" onClick={()=>setDone(false)}>ویرایش اطلاعات</button></>:<form className="assessment-form" onSubmit={e=>{e.preventDefault();setDone(true)}}><div className="steps"><b>۱</b><span/><b>۲</b><span/><b>۳</b><span/><b>۴</b></div><h2>اطلاعات اولیه</h2>{[["بازه سنی",["۱۸ تا ۲۴ سال","۲۵ تا ۳۴ سال","۳۵ سال به بالا"]],["آخرین مدرک تحصیلی",["دیپلم","کاردانی","کارشناسی یا بالاتر"]],["سطح زبان آلمانی",["A2","B1","B2","C1"]],["سابقه کار مرتبط",["کمتر از یک سال","۱ تا ۳ سال","بیشتر از ۳ سال"]]].map(([l,o]:any)=><label key={l}>{l}<select>{o.map((x:string)=><option key={x}>{x}</option>)}</select></label>)}<button className="primary-button wide-action">مشاهده نتیجه</button></form>}</section></>}
++function ToolsPage({ openCv }: { openCv: () => void }) {
++  return <><BlueHero eyebrow="مدارک بهتر، فرصت‌های بیشتر" title="سازنده رزومه آلمانی" text="اطلاعات واقعی خودت را وارد کن، پیش‌نمایش بگیر و نسخه PDF بساز." icon={<FileText />} /><section className="page-surface container"><article className="content-card resume-tool"><AppIcon><FileText /></AppIcon><div><h2>Lebenslauf</h2><p>اطلاعات تماس، سوابق کاری و تحصیلی، مهارت‌ها، زبان‌ها و گواهی‌ها را ویرایش کن.</p></div><button className="primary-button" onClick={openCv}>باز کردن سازنده رزومه <ArrowLeft /></button></article></section></>;
++}
+ 
+-function ToolsPage({openCv,navigate}:any){return <><BlueHero eyebrow="مدارک بهتر، فرصت‌های بیشتر" title="رزومه و انگیزه‌نامه" text="مدارکت را برای ارسال درخواست آماده و حرفه‌ای کن." icon={<FileText/>}/><section className="page-surface container"><div className="tool-grid"><article className="tool-card blue"><AppIcon><FileText/></AppIcon><h2>رزومه آلمانی</h2><span>Lebenslauf</span><div className="progress"><i/></div><small>۸۰٪ تکمیل</small><button onClick={openCv}>ادامه ویرایش <ArrowLeft/></button></article><article className="tool-card green"><AppIcon tone="green"><FileCheck2/></AppIcon><h2>انگیزه‌نامه اختصاصی</h2><span>Anschreiben</span><p>برای هر فرصت یک نسخه مناسب بساز.</p><button onClick={openCv}>ساخت انگیزه‌نامه <ArrowLeft/></button></article></div><article className="content-card"><h2>محتوای مدرک شما</h2>{["اطلاعات شخصی","سوابق تحصیلی","تجربه کاری","مدارک پیوست"].map(x=><div className="document-row" key={x}><Check/>{x}<ChevronLeft/></div>)}</article><button className="interview-link" onClick={()=>navigate("interview")}><Mic/> برای مصاحبه هم آماده شو <ChevronLeft/></button></section></>}
+-function InterviewPage({active,setActive}:any){return <><BlueHero eyebrow="تمرین با هوش مصنوعی" title="تمرین مصاحبه" text="با پاسخ‌دادن به سؤال‌های واقعی، برای روز مصاحبه آماده شو." icon={<Mic/>}/><section className="page-surface container interview-card"><div className="interview-topic"><AppIcon><HeartPulse/></AppIcon><div><h2>مصاحبه پرستاری</h2><p>برای دوره آوسبیلدونگ در آلمان</p></div></div><div className="question-progress"><span>سؤال ۳ از ۸</span><i><b/></i></div><h2>چرا می‌خواهید دوره آوسبیلدونگ پرستاری را در آلمان شروع کنید؟</h2><div className="interview-visual"><UserRound/></div><button className={`mic-button ${active?"recording":""}`} onClick={()=>setActive(!active)}><Mic/></button><p>{active?"در حال ضبط پاسخ شما…":"برای پاسخ لمس کنید"}</p><span className="timer"><Clock3/> ۰۲:۰۰</span><button className="secondary-button wide-action">رد کردن سؤال</button></section></>}
+-function ApplicationsPage({opportunities,openDetails}:any){const status=["دعوت به مصاحبه","در حال بررسی","مدارک ناقص","ارسال‌شده"];return <><BlueHero eyebrow="همه چیز در یک جا" title="درخواست‌های من" text="وضعیت درخواست‌هایت را مدیریت کن و قدم بعدی را از دست نده." icon={<FileCheck2/>}/><section className="page-surface container"><div className="application-stats"><span><AppIcon><FileText/></AppIcon><b>۱۲</b> همه</span><span><AppIcon tone="amber"><Clock3/></AppIcon><b>۴</b> در حال بررسی</span><span><AppIcon tone="purple"><CalendarDays/></AppIcon><b>۲</b> مصاحبه</span></div><div className="application-flow"><b>ذخیره‌شده</b><i/><b>ارسال‌شده</b><i/><b>مصاحبه</b><i/><b>نتیجه</b></div><div className="application-list">{opportunities.map((item:Opportunity,i:number)=><button key={item.id} onClick={()=>openDetails(item)}><AppIcon><Building2/></AppIcon><div><b dir="ltr">{item.title_de}</b><span>{item.employer_name}</span></div><em className={`status s${i}`}>{status[i]}</em><ChevronLeft/></button>)}</div><div className="reminder"><CalendarDays/><div><b>یادآوری مصاحبه</b><span>مصاحبه شما برای فرصت پرستاری در تاریخ ۲۳ مهر ساعت ۱۰:۰۰ است.</span></div><button>مشاهده جزئیات</button></div></section></>}
+-function BottomNav({view,navigate,openProfile}:any){const items:Array<[View,string,ReactNode]>=[["home","خانه",<House/>],["search","جست‌وجو",<Search/>],["applications","درخواست‌ها",<FileText/>],["tools","ابزارها",<BriefcaseBusiness/>]];return <nav className="bottom-nav">{items.map(([k,l,i])=><button key={k} className={view===k?"active":""} onClick={()=>navigate(k)}>{i}<span>{l}</span></button>)}<button onClick={openProfile}><UserRound/><span>پروفایل</span></button></nav>}
++function BottomNav({ view, navigate, openProfile }: any) {
++  const items: Array<[View, string, ReactNode]> = [["home", "خانه", <House />], ["search", "جست‌وجو", <Search />], ["tools", "رزومه", <BriefcaseBusiness />]];
++  return <nav className="bottom-nav">{items.map(([key, label, icon]) => <button key={key} className={view === key ? "active" : ""} onClick={() => navigate(key)}>{icon}<span>{label}</span></button>)}<button onClick={openProfile}><UserRound /><span>پروفایل</span></button></nav>;
++}
+diff --git a/resources/js/components/AuthDialog.tsx b/resources/js/components/AuthDialog.tsx
+index ddd57726d2d2d42d5d7a6af5b3fe2c11fe407712..36f6586e63020df44e06cc10f3a05ada1489f879 100644
+--- a/resources/js/components/AuthDialog.tsx
++++ b/resources/js/components/AuthDialog.tsx
+@@ -1,43 +1,94 @@
+-import { FormEvent, useState } from "react";
+-import { LogIn, UserPlus, X } from "lucide-react";
++import { FormEvent, useEffect, useState } from "react";
++import { KeyRound, LogIn, MailCheck, Send, UserPlus, X } from "lucide-react";
+ import { api, ApiError, jsonBody } from "../api";
+ import type { User } from "../types";
+ 
++type Mode = "login" | "register" | "forgot" | "reset" | "verify";
++
+ type Props = {
+   onClose: () => void;
+   onSuccess: (user: User) => void;
++  user?: User | null;
++  resetToken?: string | null;
++  resetEmail?: string;
+ };
+ 
+-export default function AuthDialog({ onClose, onSuccess }: Props) {
+-  const [mode, setMode] = useState<"login" | "register">("login");
++export default function AuthDialog({ onClose, onSuccess, user, resetToken, resetEmail = "" }: Props) {
++  const [mode, setMode] = useState<Mode>(() => resetToken ? "reset" : user && !user.email_verified ? "verify" : "login");
++  const [activeUser, setActiveUser] = useState<User | null>(user || null);
+   const [busy, setBusy] = useState(false);
+   const [error, setError] = useState("");
++  const [message, setMessage] = useState("");
++
++  useEffect(() => setActiveUser(user || null), [user]);
++
++  function changeMode(next: Mode) {
++    setMode(next);
++    setError("");
++    setMessage("");
++  }
+ 
+   async function submit(event: FormEvent<HTMLFormElement>) {
+     event.preventDefault();
+     setBusy(true);
+     setError("");
++    setMessage("");
+     const data = new FormData(event.currentTarget);
+ 
+-    const payload = mode === "login"
+-      ? {
+-          email: data.get("email"),
+-          password: data.get("password"),
+-          remember: data.get("remember") === "on",
+-        }
+-      : {
+-          name: data.get("name"),
+-          email: data.get("email"),
+-          password: data.get("password"),
+-          password_confirmation: data.get("password_confirmation"),
+-        };
+-
+     try {
+-      const response = await api<{ user: User }>(`/auth/${mode}`, {
++      if (mode === "forgot") {
++        const response = await api<{ message: string }>("/auth/forgot-password", {
++          method: "POST",
++          ...jsonBody({ email: data.get("email") }),
++        });
++        setMessage(response.message);
++        return;
++      }
++
++      if (mode === "reset") {
++        const response = await api<{ message: string }>("/auth/reset-password", {
++          method: "POST",
++          ...jsonBody({
++            token: resetToken,
++            email: data.get("email"),
++            password: data.get("password"),
++            password_confirmation: data.get("password_confirmation"),
++          }),
++        });
++        window.history.replaceState({}, "", "/");
++        changeMode("login");
++        setMessage(response.message + " اکنون وارد حساب خود شوید.");
++        return;
++      }
++
++      if (mode !== "login" && mode !== "register") return;
++
++      const payload = mode === "login"
++        ? {
++            email: data.get("email"),
++            password: data.get("password"),
++            remember: data.get("remember") === "on",
++          }
++        : {
++            name: data.get("name"),
++            email: data.get("email"),
++            password: data.get("password"),
++            password_confirmation: data.get("password_confirmation"),
++          };
++
++      const response = await api<{ message: string; user: User }>(`/auth/${mode}`, {
+         method: "POST",
+         ...jsonBody(payload),
+       });
++      setActiveUser(response.user);
+       onSuccess(response.user);
++
++      if (response.user.email_verified) {
++        onClose();
++      } else {
++        changeMode("verify");
++        setMessage(response.message);
++      }
+     } catch (exception) {
+       if (exception instanceof ApiError) {
+         const firstValidationError = Object.values(exception.errors)[0]?.[0];
+@@ -50,34 +101,88 @@ export default function AuthDialog({ onClose, onSuccess }: Props) {
+     }
+   }
+ 
++  async function resendVerification() {
++    setBusy(true);
++    setError("");
++    setMessage("");
++    try {
++      const response = await api<{ message: string }>("/auth/email/verification-notification", { method: "POST" });
++      setMessage(response.message);
++    } catch (exception) {
++      setError(exception instanceof Error ? exception.message : "ارسال ایمیل انجام نشد.");
++    } finally {
++      setBusy(false);
++    }
++  }
++
++  async function refreshVerificationStatus() {
++    setBusy(true);
++    setError("");
++    try {
++      const response = await api<{ user: User }>("/auth/me");
++      setActiveUser(response.user);
++      onSuccess(response.user);
++      if (response.user.email_verified) onClose();
++      else setError("ایمیل هنوز تأیید نشده است. لینک داخل ایمیل را باز کنید.");
++    } catch (exception) {
++      setError(exception instanceof Error ? exception.message : "بررسی وضعیت ممکن نشد.");
++    } finally {
++      setBusy(false);
++    }
++  }
++
++  const icon = mode === "register" ? <UserPlus /> : mode === "verify" ? <MailCheck /> : mode === "forgot" || mode === "reset" ? <KeyRound /> : <LogIn />;
++  const title = mode === "register" ? "ساخت حساب کاربری" : mode === "verify" ? "تأیید ایمیل" : mode === "forgot" ? "بازیابی رمز عبور" : mode === "reset" ? "انتخاب رمز جدید" : "خوش آمدید";
++
+   return (
+     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+-      <section className="auth-dialog" role="dialog" aria-modal="true" aria-label="ورود یا ثبت‌نام" onMouseDown={(event) => event.stopPropagation()}>
++      <section className="auth-dialog" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}>
+         <button className="dialog-close" type="button" onClick={onClose} aria-label="بستن"><X size={21} /></button>
+-        <div className="auth-icon">{mode === "login" ? <LogIn /> : <UserPlus />}</div>
+-        <h2>{mode === "login" ? "خوش آمدید" : "ساخت حساب کاربری"}</h2>
+-        <p>{mode === "login" ? "برای ذخیره فرصت‌ها و دیدن درصد تطابق وارد شوید." : "پروفایل خود را بسازید تا فرصت‌های مناسب‌تر را پیدا کنید."}</p>
+-
+-        <div className="auth-tabs" role="tablist">
+-          <button type="button" className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setError(""); }}>ورود</button>
+-          <button type="button" className={mode === "register" ? "active" : ""} onClick={() => { setMode("register"); setError(""); }}>ثبت‌نام</button>
+-        </div>
+-
+-        <form onSubmit={submit} className="stack-form">
+-          {mode === "register" && (
+-            <label>نام و نام خانوادگی<input name="name" autoComplete="name" required /></label>
+-          )}
+-          <label>ایمیل<input name="email" type="email" autoComplete="email" dir="ltr" required /></label>
+-          <label>رمز عبور<input name="password" type="password" minLength={8} autoComplete={mode === "login" ? "current-password" : "new-password"} dir="ltr" required /></label>
+-          {mode === "register" && (
+-            <label>تکرار رمز عبور<input name="password_confirmation" type="password" minLength={8} autoComplete="new-password" dir="ltr" required /></label>
+-          )}
+-          {mode === "login" && <label className="check-line"><input name="remember" type="checkbox" /> مرا به خاطر بسپار</label>}
+-          {error && <div className="form-error" role="alert">{error}</div>}
+-          <button className="primary-button wide" type="submit" disabled={busy}>
+-            {busy ? "کمی صبر کنید…" : mode === "login" ? "ورود به حساب" : "ساخت حساب"}
+-          </button>
+-        </form>
++        <div className="auth-icon">{icon}</div>
++        <h2>{title}</h2>
++        <p>
++          {mode === "login" && "برای ذخیره فرصت‌ها و دیدن درصد تطابق وارد شوید."}
++          {mode === "register" && "پروفایل خود را بسازید تا فرصت‌های مناسب‌تر را پیدا کنید."}
++          {mode === "forgot" && "ایمیل حساب را وارد کنید تا لینک بازیابی برایتان ارسال شود."}
++          {mode === "reset" && "رمز جدید باید حداقل ۸ نویسه و شامل حرف و عدد باشد."}
++          {mode === "verify" && <>لینک تأیید به <b dir="ltr">{activeUser?.email}</b> ارسال شده است.</>}
++        </p>
++
++        {(mode === "login" || mode === "register") && (
++          <div className="auth-tabs" role="tablist">
++            <button type="button" className={mode === "login" ? "active" : ""} onClick={() => changeMode("login")}>ورود</button>
++            <button type="button" className={mode === "register" ? "active" : ""} onClick={() => changeMode("register")}>ثبت‌نام</button>
++          </div>
++        )}
++
++        {mode === "verify" ? (
++          <div className="stack-form">
++            {error && <div className="form-error" role="alert">{error}</div>}
++            {message && <div className="form-success" role="status">{message}</div>}
++            <button className="primary-button wide" type="button" disabled={busy} onClick={refreshVerificationStatus}>بررسی وضعیت تأیید</button>
++            <button className="secondary-button wide" type="button" disabled={busy} onClick={resendVerification}><Send size={17} /> ارسال دوباره لینک</button>
++            <button className="auth-link" type="button" onClick={onClose}>بعداً انجام می‌دهم</button>
++          </div>
++        ) : (
++          <form onSubmit={submit} className="stack-form">
++            {mode === "register" && <label>نام و نام خانوادگی<input name="name" autoComplete="name" required /></label>}
++            <label>ایمیل<input name="email" type="email" defaultValue={mode === "reset" ? resetEmail : ""} autoComplete="email" dir="ltr" required /></label>
++            {(mode === "login" || mode === "register" || mode === "reset") && (
++              <label>رمز عبور<input name="password" type="password" minLength={8} autoComplete={mode === "login" ? "current-password" : "new-password"} dir="ltr" required /></label>
++            )}
++            {(mode === "register" || mode === "reset") && (
++              <label>تکرار رمز عبور<input name="password_confirmation" type="password" minLength={8} autoComplete="new-password" dir="ltr" required /></label>
++            )}
++            {mode === "login" && <label className="check-line"><input name="remember" type="checkbox" /> مرا به خاطر بسپار</label>}
++            {error && <div className="form-error" role="alert">{error}</div>}
++            {message && <div className="form-success" role="status">{message}</div>}
++            <button className="primary-button wide" type="submit" disabled={busy}>
++              {busy ? "کمی صبر کنید…" : mode === "login" ? "ورود به حساب" : mode === "register" ? "ساخت حساب" : mode === "forgot" ? "ارسال لینک بازیابی" : "تغییر رمز عبور"}
++            </button>
++            {mode === "login" && <button className="auth-link" type="button" onClick={() => changeMode("forgot")}>رمز عبور را فراموش کرده‌ام</button>}
++            {(mode === "forgot" || mode === "reset") && <button className="auth-link" type="button" onClick={() => changeMode("login")}>بازگشت به ورود</button>}
++          </form>
++        )}
+       </section>
+     </div>
+   );
+diff --git a/resources/js/types.ts b/resources/js/types.ts
+index 890fbffb058bead666c2155c6dc8ed6393ad4c9c..b6eab841a9efe6adbb5560c8a57ab59e229e1910 100644
+--- a/resources/js/types.ts
++++ b/resources/js/types.ts
+@@ -2,6 +2,7 @@ export type User = {
+   id: number;
+   name: string;
+   email: string;
++  email_verified: boolean;
+   is_admin: boolean;
+   profile_completed: boolean;
+ };
+diff --git a/routes/api.php b/routes/api.php
+index 339af6f02bf88d4fe060f362eef24791460fe69e..8f5b33adc42b21f78ed0d6216149168d5cb58021 100644
+--- a/routes/api.php
++++ b/routes/api.php
+@@ -18,26 +18,32 @@ Route::prefix('v1')->group(function (): void {
+     Route::prefix('auth')->middleware('throttle:auth')->group(function (): void {
+         Route::post('/register', [AuthController::class, 'register']);
+         Route::post('/login', [AuthController::class, 'login']);
++        Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
++        Route::post('/reset-password', [AuthController::class, 'resetPassword']);
+     });
+ 
+     Route::middleware('auth:sanctum')->group(function (): void {
+         Route::get('/auth/me', [AuthController::class, 'me']);
+         Route::post('/auth/logout', [AuthController::class, 'logout']);
+-
+-        Route::get('/profile', [ProfileController::class, 'show']);
+-        Route::put('/profile', [ProfileController::class, 'update']);
+-
+-        Route::get('/resumes', [ResumeController::class, 'index']);
+-        Route::post('/resumes', [ResumeController::class, 'store'])->middleware('throttle:10,1');
+-        Route::delete('/resumes/{resume}', [ResumeController::class, 'destroy']);
+-
+-        Route::get('/favorites', [FavoriteController::class, 'index']);
+-        Route::put('/favorites/{opportunity}', [FavoriteController::class, 'store']);
+-        Route::delete('/favorites/{opportunity}', [FavoriteController::class, 'destroy']);
+-
+-        Route::get('/german-cv', [GermanCvController::class, 'show']);
+-        Route::put('/german-cv', [GermanCvController::class, 'update']);
+-        Route::post('/application-clicks/{opportunity}', ApplicationClickController::class)
+-            ->middleware('throttle:30,1');
++        Route::post('/auth/email/verification-notification', [AuthController::class, 'sendVerificationNotification'])
++            ->middleware('throttle:6,1');
++
++        Route::middleware('verified')->group(function (): void {
++            Route::get('/profile', [ProfileController::class, 'show']);
++            Route::put('/profile', [ProfileController::class, 'update']);
++
++            Route::get('/resumes', [ResumeController::class, 'index']);
++            Route::post('/resumes', [ResumeController::class, 'store'])->middleware('throttle:10,1');
++            Route::delete('/resumes/{resume}', [ResumeController::class, 'destroy']);
++
++            Route::get('/favorites', [FavoriteController::class, 'index']);
++            Route::put('/favorites/{opportunity}', [FavoriteController::class, 'store']);
++            Route::delete('/favorites/{opportunity}', [FavoriteController::class, 'destroy']);
++
++            Route::get('/german-cv', [GermanCvController::class, 'show']);
++            Route::put('/german-cv', [GermanCvController::class, 'update']);
++            Route::post('/application-clicks/{opportunity}', ApplicationClickController::class)
++                ->middleware('throttle:30,1');
++        });
+     });
+ });
+diff --git a/routes/web.php b/routes/web.php
+index b16d5b3a402487074686c6bbcf54a7d20e1b2065..c16047b1e7207892ab72e1273e4710f291ce803f 100644
+--- a/routes/web.php
++++ b/routes/web.php
+@@ -1,7 +1,14 @@
+ <?php
+ 
++use App\Http\Controllers\Auth\EmailVerificationController;
+ use Illuminate\Support\Facades\Route;
+ 
++Route::get('/email/verify/{id}/{hash}', EmailVerificationController::class)
++    ->middleware(['signed', 'throttle:6,1'])
++    ->name('verification.verify');
++
++Route::view('/reset-password/{token}', 'app')->name('password.reset');
++
+ Route::view('/{path?}', 'app')
+     ->where('path', '^(?!admin|api|sanctum|livewire|filament).*$')
+     ->name('frontend');
+diff --git a/tests/Feature/AuthenticationTest.php b/tests/Feature/AuthenticationTest.php
+index 65ed4ef3230de648cbc3b442e2e81d260a66ddab..78dbc16acfb0502061c17eeb9dab611551a50d4d 100644
+--- a/tests/Feature/AuthenticationTest.php
++++ b/tests/Feature/AuthenticationTest.php
+@@ -2,7 +2,16 @@
+ 
+ namespace Tests\Feature;
+ 
++use App\Models\User;
++use Filament\Auth\MultiFactor\App\Contracts\HasAppAuthentication;
++use Filament\Auth\MultiFactor\App\Contracts\HasAppAuthenticationRecovery;
++use Illuminate\Auth\Notifications\ResetPassword;
++use Illuminate\Auth\Notifications\VerifyEmail;
+ use Illuminate\Foundation\Testing\RefreshDatabase;
++use Illuminate\Support\Facades\Hash;
++use Illuminate\Support\Facades\Notification;
++use Illuminate\Support\Facades\Schema;
++use Illuminate\Support\Facades\URL;
+ use Tests\TestCase;
+ 
+ class AuthenticationTest extends TestCase
+@@ -11,6 +20,8 @@ class AuthenticationTest extends TestCase
+ 
+     public function test_a_visitor_can_register_and_receive_the_current_user(): void
+     {
++        Notification::fake();
++
+         $response = $this->postJson('/api/v1/auth/register', [
+             'name' => 'Sara Ahmadi',
+             'email' => 'sara@example.com',
+@@ -21,9 +32,80 @@ class AuthenticationTest extends TestCase
+         $response
+             ->assertCreated()
+             ->assertJsonPath('user.email', 'sara@example.com')
++            ->assertJsonPath('user.email_verified', false)
+             ->assertJsonPath('user.profile_completed', false);
+ 
+         $this->assertAuthenticated();
+         $this->assertDatabaseHas('user_profiles', ['german_level' => 'none']);
++
++        $user = User::query()->where('email', 'sara@example.com')->firstOrFail();
++        Notification::assertSentTo($user, VerifyEmail::class);
++    }
++
++    public function test_unverified_user_is_blocked_from_private_features_and_can_resend_verification(): void
++    {
++        Notification::fake();
++        $user = User::factory()->unverified()->create();
++
++        $this->actingAs($user)
++            ->getJson('/api/v1/profile')
++            ->assertForbidden();
++
++        $this->actingAs($user)
++            ->postJson('/api/v1/auth/email/verification-notification')
++            ->assertOk();
++
++        Notification::assertSentTo($user, VerifyEmail::class);
++    }
++
++    public function test_a_signed_verification_link_verifies_the_email(): void
++    {
++        $user = User::factory()->unverified()->create();
++        $url = URL::temporarySignedRoute('verification.verify', now()->addMinutes(60), [
++            'id' => $user->getKey(),
++            'hash' => sha1($user->getEmailForVerification()),
++        ]);
++
++        $this->get($url)
++            ->assertRedirect('/?email_verified=1');
++
++        $this->assertTrue($user->fresh()->hasVerifiedEmail());
++    }
++
++    public function test_a_user_can_request_and_complete_a_password_reset(): void
++    {
++        Notification::fake();
++        $user = User::factory()->create(['password' => Hash::make('OldPassword1')]);
++        $token = null;
++
++        $this->postJson('/api/v1/auth/forgot-password', ['email' => $user->email])
++            ->assertOk();
++
++        Notification::assertSentTo($user, ResetPassword::class, function (ResetPassword $notification) use (&$token): bool {
++            $token = $notification->token;
++
++            return true;
++        });
++
++        $this->postJson('/api/v1/auth/reset-password', [
++            'token' => $token,
++            'email' => $user->email,
++            'password' => 'NewPassword2',
++            'password_confirmation' => 'NewPassword2',
++        ])->assertOk();
++
++        $this->assertTrue(Hash::check('NewPassword2', $user->fresh()->password));
++    }
++
++    public function test_user_model_and_schema_support_filament_totp_with_recovery_codes(): void
++    {
++        $user = User::factory()->admin()->create();
++
++        $this->assertInstanceOf(HasAppAuthentication::class, $user);
++        $this->assertInstanceOf(HasAppAuthenticationRecovery::class, $user);
++        $this->assertTrue(Schema::hasColumns('users', [
++            'app_authentication_secret',
++            'app_authentication_recovery_codes',
++        ]));
+     }
+ }

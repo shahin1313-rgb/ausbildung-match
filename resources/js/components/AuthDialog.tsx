@@ -5,7 +5,7 @@ import type { User } from "../types";
 
 type Props = {
   onClose: () => void;
-  onSuccess: (user: User) => void;
+  onSuccess: (user: User, message: string) => void;
 };
 
 export default function AuthDialog({ onClose, onSuccess }: Props) {
@@ -33,11 +33,11 @@ export default function AuthDialog({ onClose, onSuccess }: Props) {
         };
 
     try {
-      const response = await api<{ user: User }>(`/auth/${mode}`, {
+      const response = await api<{ user: User; message: string }>(`/auth/${mode}`, {
         method: "POST",
         ...jsonBody(payload),
       });
-      onSuccess(response.user);
+      onSuccess(response.user, response.message);
     } catch (exception) {
       if (exception instanceof ApiError) {
         const firstValidationError = Object.values(exception.errors)[0]?.[0];
@@ -73,6 +73,7 @@ export default function AuthDialog({ onClose, onSuccess }: Props) {
             <label>تکرار رمز عبور<input name="password_confirmation" type="password" minLength={8} autoComplete="new-password" dir="ltr" required /></label>
           )}
           {mode === "login" && <label className="check-line"><input name="remember" type="checkbox" /> مرا به خاطر بسپار</label>}
+          {mode === "login" && <a href="/forgot-password">رمز عبور را فراموش کرده‌اید؟</a>}
           {error && <div className="form-error" role="alert">{error}</div>}
           <button className="primary-button wide" type="submit" disabled={busy}>
             {busy ? "کمی صبر کنید…" : mode === "login" ? "ورود به حساب" : "ساخت حساب"}
