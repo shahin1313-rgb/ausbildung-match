@@ -41,6 +41,9 @@ class EmailAndPasswordSecurityTest extends TestCase
         ], absolute: false);
         $this->getJson($signed)->assertOk();
         $this->assertTrue($user->fresh()->hasVerifiedEmail());
+        // PHPUnit shares the application between requests; refresh both cached guards.
+        $this->app['auth']->guard('sanctum')->forgetUser();
+        $this->actingAs($user->fresh(), 'web');
         $this->getJson('/api/v1/profile')->assertOk();
     }
 
@@ -161,7 +164,9 @@ class EmailAndPasswordSecurityTest extends TestCase
             'current_password' => 'password',
             'password' => 'newsecret123', 'password_confirmation' => 'newsecret123',
         ])->assertOk();
-        $this->assertGuest();
+        $this->assertGuest('web');
+        $this->app['auth']->guard('sanctum')->forgetUser();
+        $this->getJson('/api/v1/auth/me')->assertUnauthorized();
         $this->assertDatabaseMissing('sessions', ['id' => 'old-device-session']);
         $this->assertDatabaseMissing('personal_access_tokens', ['id' => $tokenId]);
     }
@@ -181,7 +186,9 @@ class EmailAndPasswordSecurityTest extends TestCase
         $user->refresh();
         $this->assertSame('replacement@example.com', $user->email);
         $this->assertFalse($user->hasVerifiedEmail());
-        $this->assertGuest();
+        $this->assertGuest('web');
+        $this->app['auth']->guard('sanctum')->forgetUser();
+        $this->getJson('/api/v1/auth/me')->assertUnauthorized();
         Notification::assertSentTo($user, VerifyEmail::class);
     }
 
