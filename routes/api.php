@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\V1\MetaController;
 use App\Http\Controllers\Api\V1\OpportunityController;
 use App\Http\Controllers\Api\V1\ProfileController;
 use App\Http\Controllers\Api\V1\ResumeController;
+use App\Http\Middleware\EnsureApiEmailVerified;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function (): void {
@@ -40,7 +41,7 @@ Route::prefix('v1')->group(function (): void {
         Route::put('/auth/password', [PasswordController::class, 'change'])
             ->middleware('throttle:auth');
 
-        Route::middleware('verified')->group(function (): void {
+        Route::middleware(EnsureApiEmailVerified::class)->group(function (): void {
             Route::get('/profile', [ProfileController::class, 'show']);
             Route::put('/profile', [ProfileController::class, 'update']);
 
