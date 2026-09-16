@@ -54,8 +54,14 @@ class EmailAndPasswordSecurityTest extends TestCase
         $user = $this->user();
         $user->sendEmailVerificationNotification();
         Notification::assertSentTo($user, VerifyEmail::class, function (VerifyEmail $notification) use ($user): bool {
-            $url = $notification->toMail($user)->actionUrl;
+            $mail = $notification->toMail($user);
+            $url = $mail->actionUrl;
             $this->assertStringStartsWith('https://frontend.example.com/verify-email?', $url);
+            $this->assertSame([
+                'html' => 'emails.auth-action',
+                'text' => 'emails.auth-action-text',
+            ], $mail->view);
+            $this->assertStringContainsString('Ausbildung Match', view($mail->view['html'], $mail->viewData)->render());
             parse_str(parse_url($url, PHP_URL_QUERY), $params);
             $this->assertSame((string) $user->id, (string) $params['id']);
 
@@ -64,8 +70,11 @@ class EmailAndPasswordSecurityTest extends TestCase
 
         Password::sendResetLink(['email' => $user->email]);
         Notification::assertSentTo($user, ResetPassword::class, function (ResetPassword $notification) use ($user): bool {
-            $url = $notification->toMail($user)->actionUrl;
+            $mail = $notification->toMail($user);
+            $url = $mail->actionUrl;
             $this->assertStringStartsWith('https://frontend.example.com/reset-password?', $url);
+            $this->assertSame('تعیین رمز جدید', $mail->viewData['actionLabel']);
+            $this->assertStringContainsString('بازیابی امن حساب کاربری', view($mail->view['html'], $mail->viewData)->render());
             return str_contains($url, 'token=') && str_contains($url, urlencode($user->email));
         });
     }

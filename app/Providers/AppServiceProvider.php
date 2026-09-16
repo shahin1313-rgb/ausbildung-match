@@ -57,11 +57,16 @@ class AppServiceProvider extends ServiceProvider
         });
 
         VerifyEmail::toMailUsing(function ($notifiable, string $url): MailMessage {
-            return (new MailMessage)
-                ->subject('تأیید ایمیل حساب Ausbildung Match')
-                ->line('برای تأیید آدرس ایمیل حساب خود، روی دکمه زیر بزنید.')
-                ->action('تأیید ایمیل', $url)
-                ->line('این لینک تا ۶۰ دقیقه معتبر است. اگر شما این حساب را نساخته‌اید، این پیام را نادیده بگیرید.');
+            return self::authMail(
+                subject: 'تأیید ایمیل حساب Ausbildung Match',
+                title: 'ایمیلت را تأیید کن',
+                eyebrow: 'یک قدم تا شروع مسیر حرفه‌ای',
+                intro: 'برای فعال‌شدن کامل حساب و دسترسی به امکانات Ausbildung Match، آدرس ایمیل خود را تأیید کن.',
+                actionLabel: 'تأیید ایمیل',
+                actionUrl: $url,
+                notice: 'این لینک تا ۶۰ دقیقه معتبر است. اگر این حساب را نساخته‌ای، این پیام را نادیده بگیر.',
+                email: $notifiable->getEmailForVerification(),
+            );
         });
 
         ResetPassword::createUrlUsing(function ($notifiable, string $token): string {
@@ -69,12 +74,46 @@ class AppServiceProvider extends ServiceProvider
         });
 
         ResetPassword::toMailUsing(function ($notifiable, string $token): MailMessage {
-            return (new MailMessage)
-                ->subject('بازیابی رمز عبور Ausbildung Match')
-                ->line('درخواست بازیابی رمز عبور حساب شما دریافت شده است.')
-                ->action('تعیین رمز جدید', self::passwordResetFrontendUrl($notifiable, $token))
-                ->line('این لینک تا ۶۰ دقیقه معتبر و یک‌بارمصرف است. اگر شما درخواست نداده‌اید، این پیام را نادیده بگیرید.');
+            return self::authMail(
+                subject: 'بازیابی رمز عبور Ausbildung Match',
+                title: 'رمز جدیدت را تعیین کن',
+                eyebrow: 'بازیابی امن حساب کاربری',
+                intro: 'درخواست بازیابی رمز عبور حساب تو دریافت شد. برای انتخاب رمز جدید، روی دکمه زیر بزن.',
+                actionLabel: 'تعیین رمز جدید',
+                actionUrl: self::passwordResetFrontendUrl($notifiable, $token),
+                notice: 'این لینک تا ۶۰ دقیقه معتبر و یک‌بارمصرف است. اگر این درخواست را ثبت نکرده‌ای، نیازی به انجام کاری نیست.',
+                email: $notifiable->getEmailForPasswordReset(),
+            );
         });
+    }
+
+    private static function authMail(
+        string $subject,
+        string $title,
+        string $eyebrow,
+        string $intro,
+        string $actionLabel,
+        string $actionUrl,
+        string $notice,
+        string $email,
+    ): MailMessage {
+        return (new MailMessage)
+            ->subject($subject)
+            // Keep the semantic action metadata available to Laravel and tests,
+            // while the custom view controls the branded visual presentation.
+            ->action($actionLabel, $actionUrl)
+            ->view([
+                'html' => 'emails.auth-action',
+                'text' => 'emails.auth-action-text',
+            ], compact(
+                'title',
+                'eyebrow',
+                'intro',
+                'actionLabel',
+                'actionUrl',
+                'notice',
+                'email',
+            ));
     }
 
     private static function passwordResetFrontendUrl($notifiable, string $token): string
