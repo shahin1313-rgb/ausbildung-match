@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Mail\WeeklyOpportunityDigestMail;
 use App\Models\Opportunity;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Mail;
@@ -14,7 +15,7 @@ class WeeklyOpportunityDigest extends Command
 
     public function handle(): int
     {
-        $email = trim((string) ($this->option('email') ?: env('WEEKLY_DIGEST_EMAIL', env('ADMIN_EMAIL'))));
+        $email = trim((string) ($this->option('email') ?: config('opportunities.weekly_digest_email')));
 
         if (! filter_var($email, FILTER_VALIDATE_EMAIL)) {
             $this->error('Set WEEKLY_DIGEST_EMAIL or pass a valid --email address.');
@@ -29,21 +30,10 @@ class WeeklyOpportunityDigest extends Command
             ->limit(50)
             ->get();
 
-        $lines = $opportunities->map(fn (Opportunity $opportunity): string => sprintf(
-            '• %s — %s (%s) — %s/opportunities/%s',
-            $opportunity->title_de,
-            $opportunity->employer_name,
-            $opportunity->city,
-            rtrim(config('app.url'), '/'),
-            $opportunity->slug,
+        Mail::to($email)->send(new WeeklyOpportunityDigestMail(
+            $opportunities,
+            rtrim((string) config('opportunities.frontend_url'), '/'),
         ));
-
-        $body = "فرصت‌های جدید آوسبیلدونگ در ۷ روز گذشته: {$opportunities->count()}\n\n";
-        $body .= $lines->isEmpty() ? 'فرصت جدیدی ثبت نشده است.' : $lines->join("\n");
-
-        Mail::raw($body, function ($message) use ($email, $opportunities): void {
-            $message->to($email)->subject("گزارش هفتگی آوسبیلدونگ ({$opportunities->count()} فرصت جدید)");
-        });
 
         $this->info("Weekly digest sent to {$email}.");
 

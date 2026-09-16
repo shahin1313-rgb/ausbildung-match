@@ -16,6 +16,11 @@ const emptyMeta: Meta = { categories: [], cities: [], german_levels: ["A2", "B1"
 const initialFilters: Filters = { q: "", category: "", city: "", german_level: "", international: false, sort: "latest" };
 const fa = new Intl.NumberFormat("fa-IR");
 
+function opportunitySlugFromPath(): string | null {
+  const match = window.location.pathname.match(/^\/opportunities\/([^/]+)\/?$/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 function AppIcon({ children, tone = "blue" }: { children: ReactNode; tone?: string }) { return <span className={`app-icon ${tone}`}>{children}</span>; }
 
 export default function App() {
@@ -37,6 +42,28 @@ export default function App() {
     api<OpportunityCollection>("/opportunities?per_page=6&sort=latest").then((response) => { setLatest(response.data); setCatalogTotal(response.meta.total); }).catch(() => undefined);
     api<{ user: User }>("/auth/me").then(r => setUser(r.user)).catch(() => setUser(null));
   }, []);
+  const openOpportunityPath = useCallback(async (slug: string) => {
+    setLoading(true); setError("");
+    try {
+      const response = await api<{ data: Opportunity }>(`/opportunities/${encodeURIComponent(slug)}`);
+      setSelected(response.data); setView("details");
+    } catch {
+      setSelected(null); setView("details");
+      setError("این فرصت پیدا نشد یا مهلت آن به پایان رسیده است.");
+    } finally { setLoading(false); }
+  }, []);
+  useEffect(() => {
+    const slug = opportunitySlugFromPath();
+    if (slug) void openOpportunityPath(slug);
+
+    const onPopState = () => {
+      const currentSlug = opportunitySlugFromPath();
+      if (currentSlug) void openOpportunityPath(currentSlug);
+      else { setSelected(null); setView("search"); }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [openOpportunityPath]);
   useEffect(() => {
     if (!user || !user.email_verified) { setProfileCompletion(0); setCvCompletion(0); return; }
     Promise.all([api<{ profile: Profile }>("/profile"), api<{ cv: GermanCv }>("/german-cv")]).then(([profileResponse, cvResponse]) => {
@@ -49,12 +76,22 @@ export default function App() {
     }).catch(() => undefined);
   }, [user, profileOpen, cvOpen]);
   useEffect(() => { void loadOpportunities(); }, [loadOpportunities]); useEffect(() => { window.scrollTo({ top: 0, behavior: "smooth" }); }, [view]);
-  const navigate = (next: View) => { setView(next); setMobileMenu(false); };
+  const navigate = (next: View) => {
+    if (window.location.pathname.startsWith("/opportunities/")) {
+      window.history.pushState({}, "", "/");
+    }
+    setView(next); setMobileMenu(false);
+  };
   function setFilter<K extends keyof Filters>(key: K, value: Filters[K]) { setPage(1); setFavoritesOnly(false); setFilters(c => ({ ...c, [key]: value })); }
   function submitSearch(e: FormEvent) { e.preventDefault(); setFilter("q", searchDraft.trim()); navigate("search"); }
   async function toggleFavorite(o: Opportunity) { if (!user) { setAuthOpen(true); return; } if (!user.email_verified) { window.location.href="/account"; return; } setOpportunities(a => a.map(x => x.id === o.id ? {...x,is_favorite:!x.is_favorite}:x)); try { await api(`/favorites/${o.slug}`, { method: o.is_favorite ? "DELETE" : "PUT" }); } catch { setOpportunities(a => a.map(x => x.id === o.id ? {...x,is_favorite:o.is_favorite}:x)); } }
   function apply(o: Opportunity) { window.open(o.application_url, "_blank", "noopener,noreferrer"); if (user) void api(`/application-clicks/${o.slug}`, { method:"POST", body:JSON.stringify({channel:"application_url"}) }).catch(() => undefined); }
-  const openDetails = (o: Opportunity) => { setSelected(o); navigate("details"); };
+  const openDetails = (o: Opportunity) => {
+    setSelected(o);
+    window.history.pushState({}, "", `/opportunities/${encodeURIComponent(o.slug)}`);
+    setView("details");
+    setMobileMenu(false);
+  };
   const findCategory = (slug: string) => { setFilter("category", slug); navigate("search"); };
   const findMatches = (germanLevel: string) => { setFilter("german_level", germanLevel); setFilter("sort", user ? "match" : "latest"); navigate("search"); };
   const featured = latest[0] || opportunities[0], activeFilterCount = [filters.category, filters.city, filters.german_level, filters.international].filter(Boolean).length;
@@ -63,7 +100,7 @@ export default function App() {
   {user && !user.email_verified && <div className="verify-banner container" role="status">{authFeedback || "ایمیل شما هنوز تأیید نشده است."} برای استفاده از حساب، <a href="/account">وضعیت ایمیل و ارسال دوباره لینک</a> را بررسی کنید.</div>}
   {view==="home"&&<Home total={catalogTotal} meta={meta} featured={latest.slice(0,2)} searchDraft={searchDraft} setSearchDraft={setSearchDraft} submitSearch={submitSearch} navigate={navigate} openDetails={openDetails} findCategory={findCategory} user={user} profileCompletion={profileCompletion} openProfile={()=>user?setProfileOpen(true):setAuthOpen(true)}/>}
   {view==="search"&&<SearchPage opportunities={opportunities} loading={loading} error={error} filters={filters} meta={meta} activeFilterCount={activeFilterCount} setFilter={setFilter} toggleFavorite={toggleFavorite} apply={apply} openDetails={openDetails} favoritesOnly={favoritesOnly} setFavoritesOnly={setFavoritesOnly} total={total} page={page} lastPage={lastPage} setPage={setPage} reload={loadOpportunities}/>}
-  {view==="details"&&<DetailsPage opportunity={selected||featured} onBack={()=>navigate("search")} onFavorite={toggleFavorite} onApply={apply}/>}
+  {view==="details"&&(loading&&!selected?<div className="empty-state container"><p>در حال دریافت فرصت…</p></div>:error&&!selected?<div className="empty-state container"><p>{error}</p><button onClick={()=>navigate("search")}>بازگشت به فرصت‌ها</button></div>:<DetailsPage opportunity={selected||featured} onBack={()=>navigate("search")} onFavorite={toggleFavorite} onApply={apply}/>)}
   {view==="guide"&&<GuidePage meta={meta} findCategory={findCategory}/>} {view==="eligibility"&&<EligibilityPage findMatches={findMatches}/>} {view==="tools"&&<ToolsPage openCv={()=>user?setCvOpen(true):setAuthOpen(true)} openCover={()=>user?setCoverOpen(true):setAuthOpen(true)} navigate={navigate} cvCompletion={cvCompletion}/>} {view==="interview"&&<><BlueHero eyebrow="تمرین مرحله‌به‌مرحله" title="تمرین مصاحبه" text="پاسخ‌هایت را مرور کن و برای سؤال‌های رایج آماده شو." icon={<Mic/>}/><InterviewPractice/></>} {view==="applications"&&<><BlueHero eyebrow="وضعیت واقعی درخواست‌ها" title="درخواست‌های من" text="فرصت‌ها و مرحله‌ای را که خودت ثبت کرده‌ای پیگیری کن." icon={<FileCheck2/>}/><ApplicationsPage user={user} onLogin={()=>setAuthOpen(true)} openDetails={openDetails}/></>}</main><BottomNav view={view} navigate={navigate} openProfile={()=>user?setProfileOpen(true):setAuthOpen(true)}/>
   {authOpen&&<AuthDialog onClose={()=>setAuthOpen(false)} onSuccess={(u,message)=>{setUser(u);setAuthFeedback(message);setAuthOpen(false);}}/>}{profileOpen&&<ProfileDrawer meta={meta} onClose={()=>setProfileOpen(false)} onSaved={()=>api<{user:User}>("/auth/me").then(r=>setUser(r.user))}/>} {cvOpen&&user&&<CvBuilder user={user} onClose={()=>setCvOpen(false)}/>} {coverOpen&&user&&<CoverLetterBuilder user={user} opportunity={selected||featured||null} onClose={()=>setCoverOpen(false)}/>}</div>;
 }
