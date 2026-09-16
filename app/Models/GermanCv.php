@@ -20,6 +20,7 @@ class GermanCv extends Model
         'skills',
         'languages',
         'certificates',
+        'cover_letter',
     ];
 
     protected function casts(): array

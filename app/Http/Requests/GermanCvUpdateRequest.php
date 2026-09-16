@@ -36,6 +36,7 @@ class GermanCvUpdateRequest extends FormRequest
             'languages.*.level' => ['nullable', 'string', 'max:40'],
             'certificates' => ['sometimes', 'array', 'max:20'],
             'certificates.*' => ['string', 'max:190'],
+            'cover_letter' => ['nullable', 'string', 'max:15000'],
         ];
     }
 }

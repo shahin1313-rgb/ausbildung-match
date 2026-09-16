@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\V1\ApplicationClickController;
+use App\Http\Controllers\Api\V1\ApplicationController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\EmailVerificationController;
 use App\Http\Controllers\Api\V1\PasswordController;
@@ -57,6 +58,10 @@ Route::prefix('v1')->group(function (): void {
             Route::put('/german-cv', [GermanCvController::class, 'update']);
             Route::post('/application-clicks/{opportunity}', ApplicationClickController::class)
                 ->middleware('throttle:30,1');
+            Route::get('/applications', [ApplicationController::class, 'index']);
+            Route::post('/applications/{opportunity}', [ApplicationController::class, 'store']);
+            Route::patch('/applications/{application}', [ApplicationController::class, 'update']);
+            Route::delete('/applications/{application}', [ApplicationController::class, 'destroy']);
         });
     });
 });

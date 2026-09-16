@@ -110,12 +110,12 @@ export default function CvBuilder({ user, onClose }: Props) {
             <article className="cv-preview" dir="ltr">
               <div className="cv-preview-top">
                 <div className="cv-monogram">{user.name.trim().slice(0, 1).toUpperCase()}</div>
-                <div><h1>{user.name}</h1><p>{cv.headline || "Ausbildungskandidat/in"}</p></div>
+                <div><h1>{user.name}</h1><p>{cv.headline || "[Berufsbezeichnung ergänzen]"}</p></div>
               </div>
               <div className="cv-contact">
-                <span>{cv.contact?.email || user.email}</span><span>{cv.contact?.phone || "+49 …"}</span><span>{cv.contact?.city || "Deutschland"}</span>
+                <span>{cv.contact?.email || user.email}</span><span>{cv.contact?.phone || "[Telefon ergänzen]"}</span><span>{cv.contact?.city || "[Ort ergänzen]"}</span>
               </div>
-              <section><h2>PROFIL</h2><p>{cv.summary || "Kurzes berufliches Profil und Motivation für die gewünschte Ausbildung."}</p></section>
+              <section><h2>PROFIL</h2><p>{cv.summary || "[Kurzprofil und Motivation ergänzen]"}</p></section>
               {experience.title && <section><h2>BERUFSERFAHRUNG</h2><div className="cv-item"><h3>{experience.title}</h3><b>{experience.company} · {experience.period}</b><p>{experience.description}</p></div></section>}
               {education.title && <section><h2>AUSBILDUNG</h2><div className="cv-item"><h3>{education.title}</h3><b>{education.school} · {education.period}</b></div></section>}
               <div className="cv-two-columns">

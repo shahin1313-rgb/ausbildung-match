@@ -22,6 +22,11 @@ class ApplicationClickController extends Controller
             'clicked_at' => now(),
         ]);
 
-        return response()->json(['recorded' => true], 201);
+        $request->user()->applications()->firstOrCreate(
+            ['opportunity_id' => $opportunity->id],
+            ['status' => 'opened']
+        );
+
+        return response()->json(['recorded' => true, 'tracked' => true], 201);
     }
 }

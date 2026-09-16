@@ -98,6 +98,24 @@ export type GermanCv = {
   skills: string[] | null;
   languages: Array<{ name: string; level?: string }> | null;
   certificates: string[] | null;
+  cover_letter?: string | null;
+};
+
+export type ApplicationStatus = "opened" | "applied" | "reviewing" | "interview" | "offer" | "rejected" | "withdrawn";
+
+export type Application = {
+  id: number;
+  status: ApplicationStatus;
+  applied_at: string | null;
+  interview_at: string | null;
+  notes: string | null;
+  created_at: string;
+  opportunity: Opportunity;
+};
+
+export type ApplicationCollection = {
+  data: Application[];
+  summary: { total: number; active: number; interviews: number };
 };
 
 export type ApiErrorPayload = {
