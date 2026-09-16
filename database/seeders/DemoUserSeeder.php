@@ -7,13 +7,18 @@ use App\Models\Category;
 use App\Models\Opportunity;
 use App\Models\Resume;
 use App\Models\User;
+use Database\Seeders\Concerns\GuardsDemoData;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 
 class DemoUserSeeder extends Seeder
 {
+    use GuardsDemoData;
+
     public function run(): void
     {
+        $this->ensureDemoDataIsAllowed();
+
         $password = Hash::make('password');
 
         for ($i = 1; $i <= 5; $i++) {

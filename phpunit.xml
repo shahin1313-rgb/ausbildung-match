@@ -25,6 +25,8 @@
         <env name="DB_DATABASE" value=":memory:"/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
+        <env name="SEED_DEMO_DATA" value="true"/>
+        <env name="SEED_ADMIN_USER" value="false"/>
         <env name="SESSION_DRIVER" value="array"/>
     </php>
 </phpunit>

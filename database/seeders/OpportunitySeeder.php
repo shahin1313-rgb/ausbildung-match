@@ -5,12 +5,17 @@ namespace Database\Seeders;
 use App\Models\Category;
 use App\Models\Opportunity;
 use App\Models\Source;
+use Database\Seeders\Concerns\GuardsDemoData;
 use Illuminate\Database\Seeder;
 
 class OpportunitySeeder extends Seeder
 {
+    use GuardsDemoData;
+
     public function run(): void
     {
+        $this->ensureDemoDataIsAllowed();
+
         $categoryIds = Category::query()->pluck('id', 'slug');
         $source = Source::query()->where('name', 'Ausbildung Match Demo')->firstOrFail();
         $locations = [

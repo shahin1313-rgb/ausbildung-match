@@ -11,9 +11,14 @@ class DatabaseSeeder extends Seeder
         $this->call([
             CategorySeeder::class,
             SourceSeeder::class,
-            OpportunitySeeder::class,
             AdminUserSeeder::class,
-            DemoUserSeeder::class,
         ]);
+
+        if (! app()->environment('production') && config('seeding.demo_enabled')) {
+            $this->call([
+                OpportunitySeeder::class,
+                DemoUserSeeder::class,
+            ]);
+        }
     }
 }

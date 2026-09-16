@@ -52,14 +52,22 @@ php artisan serve
 
 سایت در `http://127.0.0.1:8000` و پنل مدیریت در `http://127.0.0.1:8000/admin` باز می‌شود.
 
-کاربر مدیر اولیه از `.env` خوانده می‌شود:
+ساخت مدیر اولیه اختیاری است و فقط وقتی `SEED_ADMIN_USER=true` باشد انجام می‌شود:
 
 ```dotenv
-ADMIN_EMAIL=admin@example.com
-ADMIN_PASSWORD="ChangeMe123!"
+SEED_ADMIN_USER=true
+ADMIN_EMAIL=admin@your-domain.example
+ADMIN_PASSWORD="use-a-unique-password-of-at-least-12-characters"
 ```
 
-قبل از اجرای Seeder روی سرور واقعی، این دو مقدار را تغییر دهید. اگر اطلاعات MySQL شما متفاوت است، این بخش `.env` را اصلاح کنید:
+اگر اطلاعات MySQL شما متفاوت است، این بخش `.env` را اصلاح کنید:
+
+داده‌های نمایشی فقط در محیط توسعه و با `SEED_DEMO_DATA=true` ساخته می‌شوند. در production حتی اجرای مستقیم Seederهای نمایشی مسدود است. برای ساخت اختیاری مدیر اولیه، `SEED_ADMIN_USER=true` را همراه ایمیل و رمز غیرپیش‌فرض حداقل ۱۲ کاراکتری تنظیم کنید. در استقرار production می‌توانید با خیال امن اجرا کنید:
+
+```powershell
+php artisan migrate --force
+php artisan db:seed --force
+```
 
 ```dotenv
 DB_CONNECTION=mysql
