@@ -19,6 +19,7 @@ class Application extends Model
         'applied_at',
         'interview_at',
         'notes',
+        'candidate_message',
     ];
 
     protected function casts(): array

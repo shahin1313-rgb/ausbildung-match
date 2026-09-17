@@ -86,7 +86,7 @@ class AuthController extends Controller
 
     private function payload(User $user): array
     {
-        $user->loadMissing('profile');
+        $user->loadMissing(['profile', 'company']);
 
         return [
             'id' => $user->id,
@@ -94,6 +94,7 @@ class AuthController extends Controller
             'email' => $user->email,
             'email_verified' => $user->hasVerifiedEmail(),
             'is_admin' => $user->is_admin,
+            'has_company' => $user->company !== null,
             'profile_completed' => $user->profile?->german_level !== 'none',
         ];
     }

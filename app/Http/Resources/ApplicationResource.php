@@ -15,6 +15,8 @@ class ApplicationResource extends JsonResource
             'applied_at' => $this->applied_at?->toIso8601String(),
             'interview_at' => $this->interview_at?->toIso8601String(),
             'notes' => $this->notes,
+            'candidate_message' => $this->candidate_message,
+            'managed_by_employer' => (bool) $this->opportunity?->company_id,
             'created_at' => $this->created_at?->toIso8601String(),
             'opportunity' => new OpportunityResource($this->whenLoaded('opportunity')),
         ];

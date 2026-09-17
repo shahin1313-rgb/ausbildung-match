@@ -98,4 +98,9 @@ class User extends Authenticatable implements FilamentUser, HasAppAuthentication
     {
         return $this->hasMany(Application::class);
     }
+
+    public function company(): HasOne
+    {
+        return $this->hasOne(Company::class, 'owner_id');
+    }
 }

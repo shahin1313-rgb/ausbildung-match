@@ -4,6 +4,9 @@ use App\Http\Controllers\Api\V1\ApplicationClickController;
 use App\Http\Controllers\Api\V1\ApplicationController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\EmailVerificationController;
+use App\Http\Controllers\Api\V1\EmployerApplicantController;
+use App\Http\Controllers\Api\V1\EmployerCompanyController;
+use App\Http\Controllers\Api\V1\EmployerOpportunityController;
 use App\Http\Controllers\Api\V1\PasswordController;
 use App\Http\Controllers\Api\V1\FavoriteController;
 use App\Http\Controllers\Api\V1\GermanCvController;
@@ -62,6 +65,18 @@ Route::prefix('v1')->group(function (): void {
             Route::post('/applications/{opportunity}', [ApplicationController::class, 'store']);
             Route::patch('/applications/{application}', [ApplicationController::class, 'update']);
             Route::delete('/applications/{application}', [ApplicationController::class, 'destroy']);
+
+            Route::get('/employer/company', [EmployerCompanyController::class, 'show']);
+            Route::post('/employer/company', [EmployerCompanyController::class, 'store']);
+            Route::put('/employer/company', [EmployerCompanyController::class, 'update']);
+            Route::get('/employer/opportunities', [EmployerOpportunityController::class, 'index']);
+            Route::post('/employer/opportunities', [EmployerOpportunityController::class, 'store']);
+            Route::patch('/employer/opportunities/{opportunity}', [EmployerOpportunityController::class, 'update']);
+            Route::delete('/employer/opportunities/{opportunity}', [EmployerOpportunityController::class, 'destroy']);
+            Route::get('/employer/opportunities/{opportunity}/applicants', [EmployerApplicantController::class, 'index']);
+            Route::patch('/employer/applications/{application}', [EmployerApplicantController::class, 'update']);
+            Route::get('/employer/applications/{application}/resume', [EmployerApplicantController::class, 'downloadResume'])
+                ->name('employer.applications.resume');
         });
     });
 });

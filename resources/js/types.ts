@@ -4,6 +4,7 @@ export type User = {
   email: string;
   email_verified: boolean;
   is_admin: boolean;
+  has_company: boolean;
   profile_completed: boolean;
 };
 
@@ -40,7 +41,8 @@ export type Opportunity = {
   skills: string[];
   accepts_international: boolean;
   visa_support: "unknown" | "no" | "possible" | "yes";
-  application_url: string;
+  application_url: string | null;
+  application_mode: "internal" | "external";
   contact_email?: string | null;
   published_at?: string | null;
   category: Category;
@@ -109,8 +111,33 @@ export type Application = {
   applied_at: string | null;
   interview_at: string | null;
   notes: string | null;
+  candidate_message: string | null;
+  managed_by_employer: boolean;
   created_at: string;
   opportunity: Opportunity;
+};
+
+export type Company = {
+  id: number; name: string; legal_name: string | null; website: string | null;
+  contact_email: string; phone: string | null; city: string; address: string | null;
+  description: string | null; status: "active" | "suspended";
+};
+
+export type EmployerOpportunity = {
+  id: number; slug: string; category_id: number; title_fa: string; title_de: string;
+  description_fa: string; description_de: string | null; city: string; state: string | null;
+  training_type: "dual" | "school"; start_date: string | null; application_deadline: string | null;
+  monthly_salary_from: number | null; monthly_salary_to: number | null; required_german_level: "a2" | "b1" | "b2" | "c1";
+  education_requirement: string | null; skills: string[]; accepts_international: boolean;
+  visa_support: "unknown" | "no" | "possible" | "yes"; contact_email: string | null;
+  status: "draft" | "published" | "expired"; published_at: string | null; applicants_count: number;
+};
+
+export type EmployerApplicant = {
+  id: number; status: ApplicationStatus; applied_at: string | null; interview_at: string | null;
+  candidate_message: string | null;
+  candidate: { name: string; email: string; phone: string | null; country: string | null; german_level: string | null; education_title: string | null; skills: string[] };
+  resume: { original_name: string; size_bytes: number; download_url: string } | null;
 };
 
 export type ApplicationCollection = {

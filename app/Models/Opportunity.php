@@ -19,6 +19,7 @@ class Opportunity extends Model
     protected $fillable = [
         'category_id',
         'source_id',
+        'company_id',
         'external_id',
         'slug',
         'title_fa',
@@ -103,6 +104,11 @@ class Opportunity extends Model
     public function source(): BelongsTo
     {
         return $this->belongsTo(Source::class);
+    }
+
+    public function company(): BelongsTo
+    {
+        return $this->belongsTo(Company::class);
     }
 
     public function favoredByUsers(): BelongsToMany
