@@ -125,4 +125,9 @@ class Opportunity extends Model
     {
         return $this->hasMany(Application::class);
     }
+
+    public function reports(): HasMany
+    {
+        return $this->hasMany(OpportunityReport::class);
+    }
 }

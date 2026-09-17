@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\V1\FavoriteController;
 use App\Http\Controllers\Api\V1\GermanCvController;
 use App\Http\Controllers\Api\V1\MetaController;
 use App\Http\Controllers\Api\V1\OpportunityController;
+use App\Http\Controllers\Api\V1\OpportunityReportController;
 use App\Http\Controllers\Api\V1\ProfileController;
 use App\Http\Controllers\Api\V1\ResumeController;
 use App\Http\Middleware\EnsureApiEmailVerified;
@@ -21,6 +22,8 @@ Route::prefix('v1')->group(function (): void {
     Route::get('/meta', MetaController::class);
     Route::get('/opportunities', [OpportunityController::class, 'index']);
     Route::get('/opportunities/{opportunity}', [OpportunityController::class, 'show']);
+    Route::post('/opportunities/{opportunity}/reports', [OpportunityReportController::class, 'store'])
+        ->middleware('throttle:opportunity-reports');
 
     Route::prefix('auth')->middleware('throttle:auth')->group(function (): void {
         Route::post('/register', [AuthController::class, 'register']);

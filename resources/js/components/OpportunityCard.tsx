@@ -9,6 +9,7 @@ import {
   Globe2,
   HeartHandshake,
   MapPin,
+  Flag,
 } from "lucide-react";
 import type { Opportunity } from "../types";
 
@@ -16,6 +17,7 @@ type Props = {
   opportunity: Opportunity;
   onFavorite: (opportunity: Opportunity) => void;
   onApply: (opportunity: Opportunity) => void;
+  onReport: (opportunity: Opportunity) => void;
 };
 
 const dateFormatter = new Intl.DateTimeFormat("fa-IR", {
@@ -49,7 +51,7 @@ function visaLabel(value: Opportunity["visa_support"]): string {
   }[value];
 }
 
-export default function OpportunityCard({ opportunity, onFavorite, onApply }: Props) {
+export default function OpportunityCard({ opportunity, onFavorite, onApply, onReport }: Props) {
   const [expanded, setExpanded] = useState(false);
   const hasScore = typeof opportunity.match_score === "number";
 
@@ -111,6 +113,10 @@ export default function OpportunityCard({ opportunity, onFavorite, onApply }: Pr
           درخواست <ExternalLink size={16} />
         </button>
       </div>
+
+      <button type="button" className="report-link" onClick={() => onReport(opportunity)}>
+        <Flag size={14} /> گزارش مشکل در آگهی
+      </button>
 
       <div className={`match-strip ${hasScore ? "has-score" : ""}`}>
         {hasScore ? (

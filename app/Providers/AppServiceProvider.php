@@ -43,6 +43,15 @@ class AppServiceProvider extends ServiceProvider
             ];
         });
 
+        RateLimiter::for('opportunity-reports', function (Request $request): array {
+            $identity = $request->user()?->getAuthIdentifier() ?? $request->ip();
+
+            return [
+                Limit::perMinute(3)->by('opportunity-report-minute:'.$identity),
+                Limit::perDay(20)->by('opportunity-report-day:'.$identity),
+            ];
+        });
+
         VerifyEmail::createUrlUsing(function ($notifiable): string {
             $signed = URL::temporarySignedRoute('verification.verify', now()->addMinutes(60), [
                 'id' => $notifiable->getKey(),
