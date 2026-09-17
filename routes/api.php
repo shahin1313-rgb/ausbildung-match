@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\V1\ApplicationClickController;
 use App\Http\Controllers\Api\V1\ApplicationController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\EmailVerificationController;
+use App\Http\Controllers\Api\V1\EligibilityAssessmentController;
 use App\Http\Controllers\Api\V1\EmployerApplicantController;
 use App\Http\Controllers\Api\V1\EmployerCompanyController;
 use App\Http\Controllers\Api\V1\EmployerOpportunityController;
@@ -22,6 +23,8 @@ Route::prefix('v1')->group(function (): void {
     Route::get('/meta', MetaController::class);
     Route::get('/opportunities', [OpportunityController::class, 'index']);
     Route::get('/opportunities/{opportunity}', [OpportunityController::class, 'show']);
+    Route::post('/eligibility/assess', EligibilityAssessmentController::class)
+        ->middleware('throttle:20,1');
     Route::post('/opportunities/{opportunity}/reports', [OpportunityReportController::class, 'store'])
         ->middleware('throttle:opportunity-reports');
 
