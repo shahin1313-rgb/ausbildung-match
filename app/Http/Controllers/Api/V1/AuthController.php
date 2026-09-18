@@ -18,7 +18,13 @@ class AuthController extends Controller
     public function register(RegisterRequest $request): JsonResponse
     {
         $user = DB::transaction(function () use ($request): User {
-            $user = User::create($request->safe()->only(['name', 'email', 'password']));
+            $user = User::create([
+                ...$request->safe()->only(['name', 'email', 'password']),
+                'terms_accepted_at' => now(),
+                'privacy_accepted_at' => now(),
+                'terms_version' => config('legal.terms_version'),
+                'privacy_version' => config('legal.privacy_version'),
+            ]);
             $user->profile()->create([
                 'german_level' => 'none',
                 'work_experience_years' => 0,

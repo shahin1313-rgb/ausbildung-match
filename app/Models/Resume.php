@@ -19,6 +19,8 @@ class Resume extends Model
         'size_bytes',
         'status',
         'is_primary',
+        'processing_consent_at',
+        'retention_until',
         'extracted_data',
         'analyzed_at',
     ];
@@ -33,6 +35,8 @@ class Resume extends Model
         return [
             'size_bytes' => 'integer',
             'is_primary' => 'boolean',
+            'processing_consent_at' => 'datetime',
+            'retention_until' => 'datetime',
             'extracted_data' => 'array',
             'analyzed_at' => 'datetime',
         ];

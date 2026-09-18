@@ -32,6 +32,8 @@ class AuthenticationTest extends TestCase
             'email' => 'sara@example.com',
             'password' => 'secret123',
             'password_confirmation' => 'secret123',
+            'accept_terms' => true,
+            'accept_privacy' => true,
         ]);
 
         $response

@@ -103,7 +103,10 @@ class EmployerWorkflowTest extends TestCase
         $candidate = User::factory()->create();
 
         $applicationResponse = $this->actingAs($candidate)
-            ->postJson("/api/v1/applications/{$opportunity->slug}", ['candidate_message' => 'برای این دوره انگیزه زیادی دارم.'])
+            ->postJson("/api/v1/applications/{$opportunity->slug}", [
+                'candidate_message' => 'برای این دوره انگیزه زیادی دارم.',
+                'consent_data_sharing' => true,
+            ])
             ->assertCreated()
             ->assertJsonPath('application.status', 'applied')
             ->assertJsonPath('application.managed_by_employer', true);
@@ -141,6 +144,7 @@ class EmployerWorkflowTest extends TestCase
             'opportunity_id' => $opportunity->id,
             'status' => 'applied',
             'applied_at' => now(),
+            'data_sharing_consent_at' => now(),
         ]);
         $otherEmployer = User::factory()->create();
         Company::factory()->for($otherEmployer, 'owner')->create();
@@ -170,6 +174,7 @@ class EmployerWorkflowTest extends TestCase
             'opportunity_id' => $opportunity->id,
             'status' => 'applied',
             'applied_at' => now(),
+            'data_sharing_consent_at' => now(),
         ]);
         Storage::disk('local')->put('resumes/candidate.pdf', 'private resume');
         Resume::query()->create([

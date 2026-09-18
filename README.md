@@ -23,6 +23,8 @@ Laravel 12 عمداً انتخاب شده تا با PHP 8.2.12 در XAMPP ساز
 - تطبیق کاربر و فرصت بر پایه زبان، تحصیلات، مهارت، تجربه، جابه‌جایی و زمان شروع
 - ثبت‌نام، ورود، خروج، پروفایل و علاقه‌مندی‌ها با Sanctum
 - آپلود خصوصی PDF/DOC/DOCX تا ۵ مگابایت
+- صفحات حریم خصوصی، شرایط استفاده، Impressum و سیاست نگهداری رزومه
+- ثبت رضایت‌های حقوقی و حذف خودکار رزومه پس از دوره نگهداری
 - سازنده رزومه آلمانی و خروجی PDF از پنجره چاپ مرورگر
 - پنل `/admin` برای فرصت‌ها، دسته‌ها، منابع، کاربران و گزارش کلیک درخواست
 - ثبت شرکت با وضعیت «در انتظار بررسی» و انتشار آگهی فقط پس از تأیید شرکت در پنل مدیریت
@@ -108,7 +110,7 @@ php artisan opportunities:import-json docs/import-template.json --source="Bundes
 
 ## زمان‌بندی کارها
 
-Laravel روزانه فرصت‌های گذشته را منقضی و دوشنبه ساعت ۸ صبح به وقت برلین گزارش هفتگی را ارسال می‌کند. ایمیل مقصد:
+Laravel روزانه فرصت‌های گذشته و رزومه‌های منقضی را پاک‌سازی و دوشنبه ساعت ۸ صبح به وقت برلین گزارش هفتگی را ارسال می‌کند. ایمیل مقصد:
 
 ```dotenv
 WEEKLY_DIGEST_EMAIL=you@example.com
@@ -127,6 +129,25 @@ php artisan schedule:work
 ```
 
 برای ارسال واقعی ایمیل، `MAIL_MAILER=smtp` و مشخصات SMTP را در `.env` وارد کنید. مقدار پیش‌فرض `log` است و ایمیل را در `storage/logs/laravel.log` می‌نویسد.
+
+## تنظیم اطلاعات قانونی
+
+پیش از انتشار عمومی، متغیرهای `LEGAL_PROVIDER_*` در `.env` را با اطلاعات واقعی مالک/شرکت تکمیل کنید. این اطلاعات در Impressum و سیاست حریم خصوصی نمایش داده می‌شوند. حداقل نام ارائه‌دهنده، نشانی کامل و ایمیل را وارد کنید و بسته به شکل حقوقی، نماینده، ثبت تجاری، شماره مالیات و مرجع ناظر را نیز تکمیل کنید:
+
+```dotenv
+LEGAL_PROVIDER_NAME="Example GmbH"
+LEGAL_PROVIDER_LEGAL_FORM="GmbH"
+LEGAL_PROVIDER_REPRESENTATIVE="Max Mustermann"
+LEGAL_PROVIDER_STREET_ADDRESS="Musterstraße 1"
+LEGAL_PROVIDER_POSTAL_CODE=10115
+LEGAL_PROVIDER_CITY=Berlin
+LEGAL_PROVIDER_COUNTRY=Deutschland
+LEGAL_PROVIDER_EMAIL=legal@example.com
+LEGAL_DATA_PROTECTION_EMAIL=privacy@example.com
+LEGAL_RESUME_RETENTION_DAYS=180
+```
+
+پس از تغییر مدت نگهداری یا متن‌های قانونی، نسخه‌های `LEGAL_TERMS_VERSION` و `LEGAL_PRIVACY_VERSION` را افزایش دهید. متن‌های آماده‌شده قالب عملیاتی هستند و باید پیش از انتشار با وضعیت واقعی کسب‌وکار و نظر مشاور حقوقی تطبیق داده شوند.
 
 ## تست و بررسی
 

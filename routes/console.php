@@ -10,3 +10,7 @@ Schedule::command('opportunities:weekly-digest')
     ->weeklyOn(1, '08:00')
     ->timezone('Europe/Berlin')
     ->withoutOverlapping();
+
+Schedule::command('resumes:purge-expired')
+    ->dailyAt('03:00')
+    ->withoutOverlapping();

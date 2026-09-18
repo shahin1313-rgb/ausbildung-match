@@ -30,6 +30,8 @@ export default function AuthDialog({ onClose, onSuccess }: Props) {
           email: data.get("email"),
           password: data.get("password"),
           password_confirmation: data.get("password_confirmation"),
+          accept_terms: data.get("accept_terms") === "on",
+          accept_privacy: data.get("accept_privacy") === "on",
         };
 
     try {
@@ -72,6 +74,10 @@ export default function AuthDialog({ onClose, onSuccess }: Props) {
           {mode === "register" && (
             <label>تکرار رمز عبور<input name="password_confirmation" type="password" minLength={8} autoComplete="new-password" dir="ltr" required /></label>
           )}
+          {mode === "register" && <>
+            <label className="check-line legal-consent"><input name="accept_terms" type="checkbox" required /> <span><a href="/terms" target="_blank">شرایط استفاده</a> را خوانده‌ام و می‌پذیرم.</span></label>
+            <label className="check-line legal-consent"><input name="accept_privacy" type="checkbox" required /> <span><a href="/privacy" target="_blank">سیاست حریم خصوصی</a> و پردازش داده‌های حساب را تأیید می‌کنم.</span></label>
+          </>}
           {mode === "login" && <label className="check-line"><input name="remember" type="checkbox" /> مرا به خاطر بسپار</label>}
           {mode === "login" && <a href="/forgot-password">رمز عبور را فراموش کرده‌اید؟</a>}
           {error && <div className="form-error" role="alert">{error}</div>}

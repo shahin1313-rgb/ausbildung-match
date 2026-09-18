@@ -1,0 +1,947 @@
+diff --git a/.env.example b/.env.example
+index 4729ed9..6881cf1 100644
+--- a/.env.example
++++ b/.env.example
+@@ -7,6 +7,25 @@ APP_LOCALE=fa
+ APP_FALLBACK_LOCALE=en
+ APP_FAKER_LOCALE=de_DE
+ 
++LEGAL_TERMS_VERSION=2026-09-18
++LEGAL_PRIVACY_VERSION=2026-09-18
++LEGAL_RESUME_RETENTION_DAYS=180
++LEGAL_PROVIDER_NAME=
++LEGAL_PROVIDER_LEGAL_FORM=
++LEGAL_PROVIDER_REPRESENTATIVE=
++LEGAL_PROVIDER_STREET_ADDRESS=
++LEGAL_PROVIDER_POSTAL_CODE=
++LEGAL_PROVIDER_CITY=
++LEGAL_PROVIDER_COUNTRY=Deutschland
++LEGAL_PROVIDER_EMAIL=
++LEGAL_PROVIDER_PHONE=
++LEGAL_PROVIDER_REGISTER_NAME=
++LEGAL_PROVIDER_REGISTER_NUMBER=
++LEGAL_PROVIDER_VAT_ID=
++LEGAL_PROVIDER_SUPERVISORY_AUTHORITY=
++LEGAL_PROVIDER_RESPONSIBLE_CONTENT=
++LEGAL_DATA_PROTECTION_EMAIL=
++
+ LOG_CHANNEL=stack
+ LOG_LEVEL=debug
+ 
+diff --git a/README.md b/README.md
+index 61b7838..b2defd3 100644
+--- a/README.md
++++ b/README.md
+@@ -23,6 +23,8 @@ Laravel 12 عمداً انتخاب شده تا با PHP 8.2.12 در XAMPP ساز
+ - تطبیق کاربر و فرصت بر پایه زبان، تحصیلات، مهارت، تجربه، جابه‌جایی و زمان شروع
+ - ثبت‌نام، ورود، خروج، پروفایل و علاقه‌مندی‌ها با Sanctum
+ - آپلود خصوصی PDF/DOC/DOCX تا ۵ مگابایت
++- صفحات حریم خصوصی، شرایط استفاده، Impressum و سیاست نگهداری رزومه
++- ثبت رضایت‌های حقوقی و حذف خودکار رزومه پس از دوره نگهداری
+ - سازنده رزومه آلمانی و خروجی PDF از پنجره چاپ مرورگر
+ - پنل `/admin` برای فرصت‌ها، دسته‌ها، منابع، کاربران و گزارش کلیک درخواست
+ - ثبت شرکت با وضعیت «در انتظار بررسی» و انتشار آگهی فقط پس از تأیید شرکت در پنل مدیریت
+@@ -108,7 +110,7 @@ php artisan opportunities:import-json docs/import-template.json --source="Bundes
+ 
+ ## زمان‌بندی کارها
+ 
+-Laravel روزانه فرصت‌های گذشته را منقضی و دوشنبه ساعت ۸ صبح به وقت برلین گزارش هفتگی را ارسال می‌کند. ایمیل مقصد:
++Laravel روزانه فرصت‌های گذشته و رزومه‌های منقضی را پاک‌سازی و دوشنبه ساعت ۸ صبح به وقت برلین گزارش هفتگی را ارسال می‌کند. ایمیل مقصد:
+ 
+ ```dotenv
+ WEEKLY_DIGEST_EMAIL=you@example.com
+@@ -128,6 +130,25 @@ php artisan schedule:work
+ 
+ برای ارسال واقعی ایمیل، `MAIL_MAILER=smtp` و مشخصات SMTP را در `.env` وارد کنید. مقدار پیش‌فرض `log` است و ایمیل را در `storage/logs/laravel.log` می‌نویسد.
+ 
++## تنظیم اطلاعات قانونی
++
++پیش از انتشار عمومی، متغیرهای `LEGAL_PROVIDER_*` در `.env` را با اطلاعات واقعی مالک/شرکت تکمیل کنید. این اطلاعات در Impressum و سیاست حریم خصوصی نمایش داده می‌شوند. حداقل نام ارائه‌دهنده، نشانی کامل و ایمیل را وارد کنید و بسته به شکل حقوقی، نماینده، ثبت تجاری، شماره مالیات و مرجع ناظر را نیز تکمیل کنید:
++
++```dotenv
++LEGAL_PROVIDER_NAME="Example GmbH"
++LEGAL_PROVIDER_LEGAL_FORM="GmbH"
++LEGAL_PROVIDER_REPRESENTATIVE="Max Mustermann"
++LEGAL_PROVIDER_STREET_ADDRESS="Musterstraße 1"
++LEGAL_PROVIDER_POSTAL_CODE=10115
++LEGAL_PROVIDER_CITY=Berlin
++LEGAL_PROVIDER_COUNTRY=Deutschland
++LEGAL_PROVIDER_EMAIL=legal@example.com
++LEGAL_DATA_PROTECTION_EMAIL=privacy@example.com
++LEGAL_RESUME_RETENTION_DAYS=180
++```
++
++پس از تغییر مدت نگهداری یا متن‌های قانونی، نسخه‌های `LEGAL_TERMS_VERSION` و `LEGAL_PRIVACY_VERSION` را افزایش دهید. متن‌های آماده‌شده قالب عملیاتی هستند و باید پیش از انتشار با وضعیت واقعی کسب‌وکار و نظر مشاور حقوقی تطبیق داده شوند.
++
+ ## تست و بررسی
+ 
+ ```powershell
+diff --git a/app/Console/Commands/PurgeExpiredResumes.php b/app/Console/Commands/PurgeExpiredResumes.php
+new file mode 100644
+index 0000000..276758b
+--- /dev/null
++++ b/app/Console/Commands/PurgeExpiredResumes.php
+@@ -0,0 +1,39 @@
++<?php
++
++namespace App\Console\Commands;
++
++use App\Models\Resume;
++use Illuminate\Console\Command;
++use Illuminate\Support\Facades\Storage;
++
++class PurgeExpiredResumes extends Command
++{
++    protected $signature = 'resumes:purge-expired';
++
++    protected $description = 'Delete resume files and records after their retention period';
++
++    public function handle(): int
++    {
++        $deleted = 0;
++
++        Resume::query()
++            ->whereNotNull('retention_until')
++            ->where('retention_until', '<=', now())
++            ->chunkById(100, function ($resumes) use (&$deleted): void {
++                foreach ($resumes as $resume) {
++                    $disk = Storage::disk($resume->disk);
++                    if ($disk->exists($resume->path) && ! $disk->delete($resume->path)) {
++                        $this->warn("Could not delete stored file for resume {$resume->id}; record retained.");
++                        continue;
++                    }
++
++                    $resume->delete();
++                    $deleted++;
++                }
++            });
++
++        $this->info("Purged {$deleted} expired resumes.");
++
++        return self::SUCCESS;
++    }
++}
+diff --git a/app/Http/Controllers/Api/V1/ApplicationController.php b/app/Http/Controllers/Api/V1/ApplicationController.php
+index 204c981..db6318d 100644
+--- a/app/Http/Controllers/Api/V1/ApplicationController.php
++++ b/app/Http/Controllers/Api/V1/ApplicationController.php
+@@ -41,6 +41,7 @@ class ApplicationController extends Controller
+             abort_if($request->user()->company?->id === $opportunity->company_id, 422, 'نمی‌توانید برای فرصت شرکت خودتان درخواست ارسال کنید.');
+             $validated = $request->validate([
+                 'candidate_message' => ['nullable', 'string', 'max:3000'],
++                'consent_data_sharing' => ['required', 'accepted'],
+             ]);
+             $application = $request->user()->applications()->updateOrCreate(
+                 ['opportunity_id' => $opportunity->id],
+@@ -48,6 +49,7 @@ class ApplicationController extends Controller
+                     'status' => 'applied',
+                     'applied_at' => now(),
+                     'candidate_message' => $validated['candidate_message'] ?? null,
++                    'data_sharing_consent_at' => now(),
+                 ]
+             );
+ 
+diff --git a/app/Http/Controllers/Api/V1/AuthController.php b/app/Http/Controllers/Api/V1/AuthController.php
+index 3d3cf3b..c78e739 100644
+--- a/app/Http/Controllers/Api/V1/AuthController.php
++++ b/app/Http/Controllers/Api/V1/AuthController.php
+@@ -18,7 +18,13 @@ class AuthController extends Controller
+     public function register(RegisterRequest $request): JsonResponse
+     {
+         $user = DB::transaction(function () use ($request): User {
+-            $user = User::create($request->safe()->only(['name', 'email', 'password']));
++            $user = User::create([
++                ...$request->safe()->only(['name', 'email', 'password']),
++                'terms_accepted_at' => now(),
++                'privacy_accepted_at' => now(),
++                'terms_version' => config('legal.terms_version'),
++                'privacy_version' => config('legal.privacy_version'),
++            ]);
+             $user->profile()->create([
+                 'german_level' => 'none',
+                 'work_experience_years' => 0,
+diff --git a/app/Http/Controllers/Api/V1/EmployerApplicantController.php b/app/Http/Controllers/Api/V1/EmployerApplicantController.php
+index 1441c88..7547d7a 100644
+--- a/app/Http/Controllers/Api/V1/EmployerApplicantController.php
++++ b/app/Http/Controllers/Api/V1/EmployerApplicantController.php
+@@ -19,6 +19,7 @@ class EmployerApplicantController extends Controller
+         $this->authorizeOpportunity($request, $opportunity);
+         $applications = $opportunity->applications()
+             ->where('status', '!=', 'opened')
++            ->whereNotNull('data_sharing_consent_at')
+             ->with(['user.profile', 'user.resumes'])
+             ->latest('applied_at')
+             ->get();
+@@ -67,5 +68,6 @@ class EmployerApplicantController extends Controller
+     {
+         $application->loadMissing('opportunity');
+         $this->authorizeOpportunity($request, $application->opportunity);
++        abort_unless($application->data_sharing_consent_at, 404);
+     }
+ }
+diff --git a/app/Http/Controllers/Api/V1/MetaController.php b/app/Http/Controllers/Api/V1/MetaController.php
+index 6a3519f..0401bdb 100644
+--- a/app/Http/Controllers/Api/V1/MetaController.php
++++ b/app/Http/Controllers/Api/V1/MetaController.php
+@@ -23,6 +23,12 @@ class MetaController extends Controller
+                 ->orderBy('city')
+                 ->pluck('city'),
+             'german_levels' => ['A2', 'B1', 'B2', 'C1'],
++            'legal' => [
++                'terms_version' => config('legal.terms_version'),
++                'privacy_version' => config('legal.privacy_version'),
++                'resume_retention_days' => max(1, (int) config('legal.resume_retention_days')),
++                'provider' => config('legal.provider'),
++            ],
+         ]);
+     }
+ }
+diff --git a/app/Http/Controllers/Api/V1/ResumeController.php b/app/Http/Controllers/Api/V1/ResumeController.php
+index a6e2303..398e0d5 100644
+--- a/app/Http/Controllers/Api/V1/ResumeController.php
++++ b/app/Http/Controllers/Api/V1/ResumeController.php
+@@ -43,6 +43,8 @@ class ResumeController extends Controller
+                     'size_bytes' => $file->getSize(),
+                     'status' => 'uploaded',
+                     'is_primary' => true,
++                    'processing_consent_at' => now(),
++                    'retention_until' => now()->addDays(max(1, (int) config('legal.resume_retention_days', 180))),
+                 ]);
+             });
+         } catch (Throwable $exception) {
+diff --git a/app/Http/Requests/RegisterRequest.php b/app/Http/Requests/RegisterRequest.php
+index 5863e03..008d5ba 100644
+--- a/app/Http/Requests/RegisterRequest.php
++++ b/app/Http/Requests/RegisterRequest.php
+@@ -18,6 +18,8 @@ class RegisterRequest extends FormRequest
+             'name' => ['required', 'string', 'max:120'],
+             'email' => ['required', 'email:rfc', 'max:190', 'unique:users,email'],
+             'password' => ['required', 'confirmed', Password::min(8)->letters()->numbers()],
++            'accept_terms' => ['required', 'accepted'],
++            'accept_privacy' => ['required', 'accepted'],
+         ];
+     }
+ }
+diff --git a/app/Http/Requests/ResumeUploadRequest.php b/app/Http/Requests/ResumeUploadRequest.php
+index 9fa40f7..db38e2e 100644
+--- a/app/Http/Requests/ResumeUploadRequest.php
++++ b/app/Http/Requests/ResumeUploadRequest.php
+@@ -19,6 +19,7 @@ class ResumeUploadRequest extends FormRequest
+                 'required',
+                 File::types(['pdf', 'doc', 'docx'])->max(5 * 1024),
+             ],
++            'consent_resume_processing' => ['required', 'accepted'],
+         ];
+     }
+ }
+diff --git a/app/Models/Application.php b/app/Models/Application.php
+index 18e899b..2094440 100644
+--- a/app/Models/Application.php
++++ b/app/Models/Application.php
+@@ -20,6 +20,7 @@ class Application extends Model
+         'interview_at',
+         'notes',
+         'candidate_message',
++        'data_sharing_consent_at',
+     ];
+ 
+     protected function casts(): array
+@@ -27,6 +28,7 @@ class Application extends Model
+         return [
+             'applied_at' => 'datetime',
+             'interview_at' => 'datetime',
++            'data_sharing_consent_at' => 'datetime',
+         ];
+     }
+ 
+diff --git a/app/Models/Resume.php b/app/Models/Resume.php
+index 5a3f91a..1bb5f03 100644
+--- a/app/Models/Resume.php
++++ b/app/Models/Resume.php
+@@ -19,6 +19,8 @@ class Resume extends Model
+         'size_bytes',
+         'status',
+         'is_primary',
++        'processing_consent_at',
++        'retention_until',
+         'extracted_data',
+         'analyzed_at',
+     ];
+@@ -33,6 +35,8 @@ class Resume extends Model
+         return [
+             'size_bytes' => 'integer',
+             'is_primary' => 'boolean',
++            'processing_consent_at' => 'datetime',
++            'retention_until' => 'datetime',
+             'extracted_data' => 'array',
+             'analyzed_at' => 'datetime',
+         ];
+diff --git a/app/Models/User.php b/app/Models/User.php
+index 46537f8..4f5b487 100644
+--- a/app/Models/User.php
++++ b/app/Models/User.php
+@@ -31,6 +31,10 @@ class User extends Authenticatable implements FilamentUser, HasAppAuthentication
+         'password',
+         'is_admin',
+         'email_verified_at',
++        'terms_accepted_at',
++        'privacy_accepted_at',
++        'terms_version',
++        'privacy_version',
+     ];
+ 
+     protected $hidden = [
+@@ -44,6 +48,8 @@ class User extends Authenticatable implements FilamentUser, HasAppAuthentication
+     {
+         return [
+             'email_verified_at' => 'datetime',
++            'terms_accepted_at' => 'datetime',
++            'privacy_accepted_at' => 'datetime',
+             'password' => 'hashed',
+             'is_admin' => 'boolean',
+         ];
+diff --git a/config/legal.php b/config/legal.php
+new file mode 100644
+index 0000000..96652b2
+--- /dev/null
++++ b/config/legal.php
+@@ -0,0 +1,25 @@
++<?php
++
++return [
++    'terms_version' => env('LEGAL_TERMS_VERSION', '2026-09-18'),
++    'privacy_version' => env('LEGAL_PRIVACY_VERSION', '2026-09-18'),
++    'resume_retention_days' => (int) env('LEGAL_RESUME_RETENTION_DAYS', 180),
++
++    'provider' => [
++        'name' => env('LEGAL_PROVIDER_NAME'),
++        'legal_form' => env('LEGAL_PROVIDER_LEGAL_FORM'),
++        'representative' => env('LEGAL_PROVIDER_REPRESENTATIVE'),
++        'street_address' => env('LEGAL_PROVIDER_STREET_ADDRESS'),
++        'postal_code' => env('LEGAL_PROVIDER_POSTAL_CODE'),
++        'city' => env('LEGAL_PROVIDER_CITY'),
++        'country' => env('LEGAL_PROVIDER_COUNTRY', 'Deutschland'),
++        'email' => env('LEGAL_PROVIDER_EMAIL'),
++        'phone' => env('LEGAL_PROVIDER_PHONE'),
++        'register_name' => env('LEGAL_PROVIDER_REGISTER_NAME'),
++        'register_number' => env('LEGAL_PROVIDER_REGISTER_NUMBER'),
++        'vat_id' => env('LEGAL_PROVIDER_VAT_ID'),
++        'supervisory_authority' => env('LEGAL_PROVIDER_SUPERVISORY_AUTHORITY'),
++        'responsible_content' => env('LEGAL_PROVIDER_RESPONSIBLE_CONTENT'),
++        'data_protection_email' => env('LEGAL_DATA_PROTECTION_EMAIL', env('LEGAL_PROVIDER_EMAIL')),
++    ],
++];
+diff --git a/database/migrations/2026_09_18_000002_add_legal_consents_and_resume_retention.php b/database/migrations/2026_09_18_000002_add_legal_consents_and_resume_retention.php
+new file mode 100644
+index 0000000..44ae06e
+--- /dev/null
++++ b/database/migrations/2026_09_18_000002_add_legal_consents_and_resume_retention.php
+@@ -0,0 +1,48 @@
++<?php
++
++use Carbon\Carbon;
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\DB;
++use Illuminate\Support\Facades\Schema;
++
++return new class extends Migration
++{
++    public function up(): void
++    {
++        Schema::table('users', function (Blueprint $table): void {
++            $table->timestamp('terms_accepted_at')->nullable()->after('email_verified_at');
++            $table->timestamp('privacy_accepted_at')->nullable()->after('terms_accepted_at');
++            $table->string('terms_version', 30)->nullable()->after('privacy_accepted_at');
++            $table->string('privacy_version', 30)->nullable()->after('terms_version');
++        });
++        Schema::table('resumes', function (Blueprint $table): void {
++            $table->timestamp('processing_consent_at')->nullable()->after('is_primary');
++            $table->timestamp('retention_until')->nullable()->index()->after('processing_consent_at');
++        });
++        Schema::table('applications', function (Blueprint $table): void {
++            $table->timestamp('data_sharing_consent_at')->nullable()->after('candidate_message');
++        });
++
++        $retentionDays = max(1, (int) config('legal.resume_retention_days', 180));
++        DB::table('resumes')->orderBy('id')->chunkById(200, function ($resumes) use ($retentionDays): void {
++            foreach ($resumes as $resume) {
++                DB::table('resumes')->where('id', $resume->id)->update([
++                    'retention_until' => Carbon::parse($resume->created_at)->addDays($retentionDays),
++                ]);
++            }
++        });
++    }
++
++    public function down(): void
++    {
++        Schema::table('applications', fn (Blueprint $table) => $table->dropColumn('data_sharing_consent_at'));
++        Schema::table('resumes', function (Blueprint $table): void {
++            $table->dropIndex(['retention_until']);
++            $table->dropColumn(['processing_consent_at', 'retention_until']);
++        });
++        Schema::table('users', fn (Blueprint $table) => $table->dropColumn([
++            'terms_accepted_at', 'privacy_accepted_at', 'terms_version', 'privacy_version',
++        ]));
++    }
++};
+diff --git a/docs/API.md b/docs/API.md
+index 9a61299..6f7c190 100644
+--- a/docs/API.md
++++ b/docs/API.md
+@@ -6,7 +6,7 @@ Base path: `/api/v1`
+ 
+ | Method | Path | کاربرد |
+ |---|---|---|
+-| GET | `/meta` | دسته‌ها، شهرها و سطح‌های زبان |
++| GET | `/meta` | دسته‌ها، شهرها، سطح‌های زبان و تنظیمات عمومی صفحات قانونی |
+ | GET | `/opportunities` | فهرست صفحه‌بندی‌شده فرصت‌ها |
+ | GET | `/opportunities/{slug}` | جزئیات یک فرصت منتشرشده |
+ | POST | `/auth/register` | ساخت حساب و شروع Session |
+@@ -31,3 +31,11 @@ Base path: `/api/v1`
+ | POST | `/application-clicks/{slug}` | ثبت خروج به صفحه رسمی درخواست |
+ 
+ فرانت قبل از درخواست mutating ابتدا `/sanctum/csrf-cookie` را فراخوانی می‌کند و Cookie رمزنگاری‌شده Session را با `credentials: include` می‌فرستد.
++
++## فیلدهای رضایت الزامی
++
++- ثبت‌نام: `accept_terms=true` و `accept_privacy=true`
++- آپلود رزومه (`multipart/form-data`): `consent_resume_processing=1`
++- درخواست مستقیم برای آگهی شرکتی: `consent_data_sharing=true`
++
++زمان و نسخه پذیرش شرایط/حریم خصوصی، زمان رضایت پردازش رزومه و زمان رضایت اشتراک‌گذاری درخواست در دیتابیس ثبت می‌شوند. این فیلدها فقط از درخواست معتبر کاربر تولید می‌شوند.
+diff --git a/resources/css/app.css b/resources/css/app.css
+index 0ce7e04..c3fad16 100644
+--- a/resources/css/app.css
++++ b/resources/css/app.css
+@@ -240,6 +240,10 @@ footer p { max-width: 500px; text-align: center; line-height: 1.8; }
+   @page { size: A4; margin: 0; }
+ }
+ 
++/* Legal pages and explicit consent */
++.legal-consent{align-items:flex-start!important;line-height:1.7}.legal-consent input{margin-top:5px;flex:0 0 auto}.legal-consent a,.application-consent-note a{color:var(--blue);text-decoration:underline}.legal-page{max-width:900px;padding:52px 0 70px}.legal-page>header{margin-bottom:20px;padding:34px;color:white;border-radius:24px;background:linear-gradient(135deg,#0d6fd1,#1599ee)}.legal-page>header span{font-weight:800;opacity:.9}.legal-page>header h1{margin:8px 0;font-size:38px}.legal-page>header p{margin:0;opacity:.82}.legal-page>article{padding:36px;border:1px solid var(--line);border-radius:24px;background:white;box-shadow:var(--shadow)}.legal-page h2{margin:30px 0 8px;color:var(--navy);font-size:20px}.legal-page h2:first-child{margin-top:0}.legal-page p,.legal-page li{color:#4f6278;line-height:2}.legal-page ul{padding-right:22px}.legal-address{padding:16px;display:grid;gap:5px;color:#435a73;border-right:4px solid var(--blue);border-radius:10px;background:#f1f7fd;font-style:normal}.legal-warning{margin-bottom:24px;padding:16px;color:#754c00;border:1px solid #f0c86d;border-radius:12px;background:#fff7df;line-height:1.8}.legal-details{display:grid;gap:2px}.legal-details>div{padding:12px;display:grid;grid-template-columns:minmax(180px,.45fr) 1fr;gap:16px;border-bottom:1px solid var(--line)}.legal-details dt{font-weight:800}.legal-details dd{margin:0;color:#53677e}.application-consent-note{margin:0;padding:13px 16px;color:#556a82;border-radius:12px;background:#edf6ff;font-size:12px;line-height:1.8}.site-footer{padding:28px 0;color:#64768a;border-top:1px solid var(--line);background:#f5f8fb}.site-footer .container{display:flex;align-items:center;justify-content:space-between;gap:20px}.site-footer nav{display:flex;flex-wrap:wrap;gap:8px}.site-footer a{padding:6px;color:#52677e}.site-footer a:hover{color:var(--blue)}
++@media(max-width:700px){.legal-page{width:calc(100% - 24px);padding:25px 0}.legal-page>header,.legal-page>article{padding:22px}.legal-page>header h1{font-size:29px}.legal-details>div{grid-template-columns:1fr;gap:5px}.site-footer{padding-bottom:100px}.site-footer .container{align-items:flex-start;flex-direction:column}.site-footer nav{display:grid}}
++
+ @media(max-width:700px){.report-backdrop{padding:0;align-items:end}.report-dialog{width:100%;max-height:92vh;padding:27px 18px 24px;border-radius:24px 24px 0 0}.report-heading h2{font-size:19px}.report-actions{display:grid;grid-template-columns:1fr 1fr}.report-actions button{width:100%;justify-content:center}}
+ 
+ /* 2026 reference-led product shell */
+diff --git a/resources/js/App.tsx b/resources/js/App.tsx
+index 7eabc37..34b70ee 100644
+--- a/resources/js/App.tsx
++++ b/resources/js/App.tsx
+@@ -11,11 +11,12 @@ import EligibilityAssessment from "./components/EligibilityAssessment";
+ import OpportunityCard from "./components/OpportunityCard";
+ import ReportOpportunityDialog from "./components/ReportOpportunityDialog";
+ import ProfileDrawer from "./components/ProfileDrawer";
++import LegalPages, { type LegalPageKey } from "./components/LegalPages";
+ import type { GermanCv, Meta, Opportunity, OpportunityCollection, Profile, User } from "./types";
+ 
+-type View = "home" | "search" | "details" | "guide" | "eligibility" | "tools" | "interview" | "applications" | "employer";
++type View = "home" | "search" | "details" | "guide" | "eligibility" | "tools" | "interview" | "applications" | "employer" | LegalPageKey;
+ type Filters = { q: string; category: string; city: string; german_level: string; international: boolean; sort: string };
+-const emptyMeta: Meta = { categories: [], cities: [], german_levels: ["A2", "B1", "B2", "C1"] };
++const emptyMeta: Meta = { categories: [], cities: [], german_levels: ["A2", "B1", "B2", "C1"], legal: { terms_version: "2026-09-18", privacy_version: "2026-09-18", resume_retention_days: 180, provider: { name: null, legal_form: null, representative: null, street_address: null, postal_code: null, city: null, country: "Deutschland", email: null, phone: null, register_name: null, register_number: null, vat_id: null, supervisory_authority: null, responsible_content: null, data_protection_email: null } } };
+ const initialFilters: Filters = { q: "", category: "", city: "", german_level: "", international: false, sort: "latest" };
+ const fa = new Intl.NumberFormat("fa-IR");
+ 
+@@ -24,10 +25,17 @@ function opportunitySlugFromPath(): string | null {
+   return match ? decodeURIComponent(match[1]) : null;
+ }
+ 
++const legalPaths: Record<LegalPageKey, string> = { privacy: "/privacy", terms: "/terms", impressum: "/impressum", "resume-retention": "/resume-retention" };
++function legalPageFromPath(): LegalPageKey | null {
++  const path = window.location.pathname.replace(/\/$/, "") || "/";
++  return (Object.entries(legalPaths).find(([, value]) => value === path)?.[0] as LegalPageKey | undefined) || null;
++}
++function isLegalView(view: View): view is LegalPageKey { return view in legalPaths; }
++
+ function AppIcon({ children, tone = "blue" }: { children: ReactNode; tone?: string }) { return <span className={`app-icon ${tone}`}>{children}</span>; }
+ 
+ export default function App() {
+-  const [view, setView] = useState<View>("home"), [meta, setMeta] = useState<Meta>(emptyMeta), [filters, setFilters] = useState<Filters>(initialFilters), [searchDraft, setSearchDraft] = useState("");
++  const [view, setView] = useState<View>(() => legalPageFromPath() || "home"), [meta, setMeta] = useState<Meta>(emptyMeta), [filters, setFilters] = useState<Filters>(initialFilters), [searchDraft, setSearchDraft] = useState("");
+   const [opportunities, setOpportunities] = useState<Opportunity[]>([]), [latest, setLatest] = useState<Opportunity[]>([]), [selected, setSelected] = useState<Opportunity | null>(null), [page, setPage] = useState(1), [lastPage, setLastPage] = useState(1), [total, setTotal] = useState(0), [catalogTotal, setCatalogTotal] = useState(0);
+   const [loading, setLoading] = useState(true), [error, setError] = useState(""), [user, setUser] = useState<User | null>(null), [authFeedback, setAuthFeedback] = useState(""), [authOpen, setAuthOpen] = useState(false), [profileOpen, setProfileOpen] = useState(false), [cvOpen, setCvOpen] = useState(false), [coverOpen, setCoverOpen] = useState(false), [mobileMenu, setMobileMenu] = useState(false), [favoritesOnly, setFavoritesOnly] = useState(false), [profileCompletion, setProfileCompletion] = useState(0), [cvCompletion, setCvCompletion] = useState(0);
+   const [reportingOpportunity, setReportingOpportunity] = useState<Opportunity | null>(null);
+@@ -59,11 +67,15 @@ export default function App() {
+   useEffect(() => {
+     const slug = opportunitySlugFromPath();
+     if (slug) void openOpportunityPath(slug);
++    else {
++      const legalPage = legalPageFromPath();
++      if (legalPage) setView(legalPage);
++    }
+ 
+     const onPopState = () => {
+       const currentSlug = opportunitySlugFromPath();
+       if (currentSlug) void openOpportunityPath(currentSlug);
+-      else { setSelected(null); setView("search"); }
++      else { setSelected(null); setView(legalPageFromPath() || "home"); }
+     };
+     window.addEventListener("popstate", onPopState);
+     return () => window.removeEventListener("popstate", onPopState);
+@@ -81,9 +93,8 @@ export default function App() {
+   }, [user, profileOpen, cvOpen]);
+   useEffect(() => { void loadOpportunities(); }, [loadOpportunities]); useEffect(() => { window.scrollTo({ top: 0, behavior: "smooth" }); }, [view]);
+   const navigate = (next: View) => {
+-    if (window.location.pathname.startsWith("/opportunities/")) {
+-      window.history.pushState({}, "", "/");
+-    }
++    const nextPath = isLegalView(next) ? legalPaths[next] : "/";
++    if (window.location.pathname !== nextPath) window.history.pushState({}, "", nextPath);
+     setView(next); setMobileMenu(false);
+   };
+   function setFilter<K extends keyof Filters>(key: K, value: Filters[K]) { setPage(1); setFavoritesOnly(false); setFilters(c => ({ ...c, [key]: value })); }
+@@ -93,8 +104,10 @@ export default function App() {
+     if (o.application_mode === "internal") {
+       if (!user) { setAuthOpen(true); return; }
+       if (!user.email_verified) { window.location.href = "/account"; return; }
++      const consent = window.confirm("با تأیید، نام، ایمیل، اطلاعات مرتبط پروفایل، پیام و رزومه اصلی شما برای شرکت همین آگهی ارسال می‌شود. آیا موافقید؟");
++      if (!consent) return;
+       try {
+-        const response = await api<{ message: string }>(`/applications/${o.slug}`, { method: "POST", body: JSON.stringify({}) });
++        const response = await api<{ message: string }>(`/applications/${o.slug}`, { method: "POST", body: JSON.stringify({ consent_data_sharing: true }) });
+         window.alert(response.message);
+         navigate("applications");
+       } catch (exception) {
+@@ -120,7 +133,7 @@ export default function App() {
+   {view==="home"&&<Home total={catalogTotal} meta={meta} featured={latest.slice(0,2)} searchDraft={searchDraft} setSearchDraft={setSearchDraft} submitSearch={submitSearch} navigate={navigate} openDetails={openDetails} findCategory={findCategory} user={user} profileCompletion={profileCompletion} openProfile={()=>user?setProfileOpen(true):setAuthOpen(true)}/>}
+   {view==="search"&&<SearchPage opportunities={opportunities} loading={loading} error={error} filters={filters} meta={meta} activeFilterCount={activeFilterCount} setFilter={setFilter} toggleFavorite={toggleFavorite} apply={apply} report={setReportingOpportunity} openDetails={openDetails} favoritesOnly={favoritesOnly} setFavoritesOnly={setFavoritesOnly} total={total} page={page} lastPage={lastPage} setPage={setPage} reload={loadOpportunities}/>}
+   {view==="details"&&(loading&&!selected?<div className="empty-state container"><p>در حال دریافت فرصت…</p></div>:error&&!selected?<div className="empty-state container"><p>{error}</p><button onClick={()=>navigate("search")}>بازگشت به فرصت‌ها</button></div>:<DetailsPage opportunity={selected||featured} onBack={()=>navigate("search")} onFavorite={toggleFavorite} onApply={apply} onReport={setReportingOpportunity}/>)}
+-  {view==="guide"&&<GuidePage meta={meta} findCategory={findCategory}/>} {view==="eligibility"&&<><BlueHero eyebrow="ارزیابی واقعی و قابل توضیح" title="ارزیابی شرایط اولیه Ausbildung" text="سن، تحصیلات، زبان و سابقه‌ات را بررسی کن و ببین برای شروع اقدام چه قدم‌هایی باقی مانده است." icon={<ListChecks/>}/><EligibilityAssessment user={user} onLogin={()=>setAuthOpen(true)} onEditProfile={()=>setProfileOpen(true)} findMatches={findMatches}/></>} {view==="tools"&&<ToolsPage openCv={()=>user?setCvOpen(true):setAuthOpen(true)} openCover={()=>user?setCoverOpen(true):setAuthOpen(true)} navigate={navigate} cvCompletion={cvCompletion}/>} {view==="interview"&&<><BlueHero eyebrow="تمرین مرحله‌به‌مرحله" title="تمرین مصاحبه" text="پاسخ‌هایت را مرور کن و برای سؤال‌های رایج آماده شو." icon={<Mic/>}/><InterviewPractice/></>} {view==="applications"&&<><BlueHero eyebrow="وضعیت واقعی درخواست‌ها" title="درخواست‌های من" text="فرصت‌ها و مرحله‌ای را که خودت ثبت کرده‌ای پیگیری کن." icon={<FileCheck2/>}/><ApplicationsPage user={user} onLogin={()=>setAuthOpen(true)} openDetails={openDetails}/></>} {view==="employer"&&<><BlueHero eyebrow="مدیریت واقعی استخدام" title="پنل کارفرما" text="شرکت را ثبت، فرصت منتشر و وضعیت متقاضیان را مدیریت کنید." icon={<Building2/>}/><EmployerDashboard user={user} meta={meta} onLogin={()=>setAuthOpen(true)}/></>}</main><BottomNav view={view} navigate={navigate} openProfile={()=>user?setProfileOpen(true):setAuthOpen(true)}/>
++  {view==="guide"&&<GuidePage meta={meta} findCategory={findCategory}/>} {view==="eligibility"&&<><BlueHero eyebrow="ارزیابی واقعی و قابل توضیح" title="ارزیابی شرایط اولیه Ausbildung" text="سن، تحصیلات، زبان و سابقه‌ات را بررسی کن و ببین برای شروع اقدام چه قدم‌هایی باقی مانده است." icon={<ListChecks/>}/><EligibilityAssessment user={user} onLogin={()=>setAuthOpen(true)} onEditProfile={()=>setProfileOpen(true)} findMatches={findMatches}/></>} {view==="tools"&&<ToolsPage openCv={()=>user?setCvOpen(true):setAuthOpen(true)} openCover={()=>user?setCoverOpen(true):setAuthOpen(true)} navigate={navigate} cvCompletion={cvCompletion}/>} {view==="interview"&&<><BlueHero eyebrow="تمرین مرحله‌به‌مرحله" title="تمرین مصاحبه" text="پاسخ‌هایت را مرور کن و برای سؤال‌های رایج آماده شو." icon={<Mic/>}/><InterviewPractice/></>} {view==="applications"&&<><BlueHero eyebrow="وضعیت واقعی درخواست‌ها" title="درخواست‌های من" text="فرصت‌ها و مرحله‌ای را که خودت ثبت کرده‌ای پیگیری کن." icon={<FileCheck2/>}/><ApplicationsPage user={user} onLogin={()=>setAuthOpen(true)} openDetails={openDetails}/></>} {view==="employer"&&<><BlueHero eyebrow="مدیریت واقعی استخدام" title="پنل کارفرما" text="شرکت را ثبت، فرصت منتشر و وضعیت متقاضیان را مدیریت کنید." icon={<Building2/>}/><EmployerDashboard user={user} meta={meta} onLogin={()=>setAuthOpen(true)}/></>} {isLegalView(view)&&<LegalPages page={view} legal={meta.legal}/>}</main><SiteFooter/><BottomNav view={view} navigate={navigate} openProfile={()=>user?setProfileOpen(true):setAuthOpen(true)}/>
+   {authOpen&&<AuthDialog onClose={()=>setAuthOpen(false)} onSuccess={(u,message)=>{setUser(u);setAuthFeedback(message);setAuthOpen(false);}}/>}{profileOpen&&<ProfileDrawer meta={meta} onClose={()=>setProfileOpen(false)} onSaved={()=>api<{user:User}>("/auth/me").then(r=>setUser(r.user))}/>} {cvOpen&&user&&<CvBuilder user={user} onClose={()=>setCvOpen(false)}/>} {coverOpen&&user&&<CoverLetterBuilder user={user} opportunity={selected||featured||null} onClose={()=>setCoverOpen(false)}/>} {reportingOpportunity&&<ReportOpportunityDialog opportunity={reportingOpportunity} user={user} onClose={()=>setReportingOpportunity(null)}/>}</div>;
+ }
+ 
+@@ -133,10 +146,11 @@ function Quick({icon,title,text,onClick}:any){return <button onClick={onClick}><
+ 
+ function SearchPage(p:any) { return <><BlueHero eyebrow="فرصت مناسب همین نزدیکی‌ست" title="جست‌وجوی آوسبیلدونگ" text="فرصت‌های منتشرشده را با رشته، شهر و شرایط خودت فیلتر کن." icon={<Search/>}/><section className="page-surface container search-surface"><div className="search-box"><Search/><input value={p.filters.q} onChange={(e)=>p.setFilter("q",e.target.value)} placeholder="عنوان رشته، شهر یا شرکت"/></div>{!p.favoritesOnly&&<div className="filter-chips"><select value={p.filters.city} onChange={(e)=>p.setFilter("city",e.target.value)}><option value="">همه شهرها</option>{p.meta.cities.map((x:string)=><option key={x}>{x}</option>)}</select><select value={p.filters.german_level} onChange={(e)=>p.setFilter("german_level",e.target.value)}><option value="">سطح زبان</option>{p.meta.german_levels.map((x:string)=><option key={x}>{x}</option>)}</select><select value={p.filters.category} onChange={(e)=>p.setFilter("category",e.target.value)}><option value="">همه رشته‌ها</option>{p.meta.categories.map((x:any)=><option key={x.id} value={x.slug}>{x.name_fa}</option>)}</select><label><input type="checkbox" checked={p.filters.international} onChange={(e)=>p.setFilter("international",e.target.checked)}/> پذیرش بین‌المللی</label></div>}<div className="results-head"><h2>{p.favoritesOnly?"ذخیره‌شده‌ها":`${fa.format(p.total)} نتیجه پیدا شد`}</h2></div>{p.loading?<div className="cards-grid">{[1,2,3].map(x=><div className="skeleton-card" key={x}/>)}</div>:p.error?<div className="empty-state"><p>{p.error}</p><button onClick={p.reload}>تلاش دوباره</button></div>:p.opportunities.length===0?<div className="empty-state"><p>فرصتی مطابق فیلترهای فعلی پیدا نشد.</p></div>:<div className="cards-grid">{p.opportunities.map((item:Opportunity)=><div className="card-wrap" key={item.id}><OpportunityCard opportunity={item} onFavorite={p.toggleFavorite} onApply={p.apply} onReport={p.report}/><button className="card-detail-link" onClick={()=>p.openDetails(item)}>مشاهده جزئیات کامل <ChevronLeft/></button></div>)}</div>}{p.lastPage>1&&<div className="pagination"><button disabled={p.page<=1} onClick={()=>p.setPage(p.page-1)}>قبلی</button><span>{fa.format(p.page)} از {fa.format(p.lastPage)}</span><button disabled={p.page>=p.lastPage} onClick={()=>p.setPage(p.page+1)}>بعدی</button></div>}</section></>; }
+ 
+-function DetailsPage({opportunity,onBack,onFavorite,onApply,onReport}:any) { if(!opportunity)return <div className="empty-state container">فرصتی انتخاب نشده است.</div>; return <><section className="detail-hero"><div className="container"><button className="round-back" onClick={onBack}><ArrowLeft/></button><button className="round-save" onClick={()=>onFavorite(opportunity)}><Bookmark fill={opportunity.is_favorite?"currentColor":"none"}/></button><div className="detail-title"><AppIcon><BriefcaseBusiness/></AppIcon><div><h1 dir="ltr">{opportunity.title_de}</h1><p>{opportunity.employer_name}</p><span><MapPin/> {opportunity.city}{opportunity.state?` · ${opportunity.state}`:""}</span><span><CalendarDays/> شروع: {opportunity.start_date||"در آگهی مشخص نشده"}</span><span><BadgeEuro/> {opportunity.monthly_salary_from?`${fa.format(opportunity.monthly_salary_from)} €`:"حقوق در آگهی مشخص نشده"}</span></div></div><div className="friendly-illustration compact"><GraduationCap/></div></div></section><section className="page-surface container detail-content"><article className="content-card"><h2>درباره دوره</h2><p>{opportunity.description_fa}</p></article><article className="content-card"><h2>شرایط ثبت‌شده در آگهی</h2><ul className="check-list"><li>زبان آلمانی {opportunity.required_german_level}</li>{opportunity.education_requirement&&<li>{opportunity.education_requirement}</li>}<li>{opportunity.accepts_international?"پذیرش متقاضی بین‌المللی اعلام شده":"پذیرش بین‌المللی در منبع تأیید نشده"}</li></ul></article>{opportunity.skills.length>0&&<article className="content-card"><h2>مهارت‌های درج‌شده</h2><div className="tag-list">{opportunity.skills.map((x:string)=><span key={x}>{x}</span>)}</div></article>}<button className="primary-button wide-action" onClick={()=>onApply(opportunity)}>{opportunity.application_mode==="internal"?"ارسال درخواست مستقیم":"بازکردن صفحه درخواست کارفرما"} <ArrowLeft/></button><button type="button" className="detail-report-button" onClick={()=>onReport(opportunity)}>گزارش کلاهبرداری، لینک خراب، اطلاعات اشتباه یا فرصت منقضی</button></section></>; }
++function DetailsPage({opportunity,onBack,onFavorite,onApply,onReport}:any) { if(!opportunity)return <div className="empty-state container">فرصتی انتخاب نشده است.</div>; return <><section className="detail-hero"><div className="container"><button className="round-back" onClick={onBack}><ArrowLeft/></button><button className="round-save" onClick={()=>onFavorite(opportunity)}><Bookmark fill={opportunity.is_favorite?"currentColor":"none"}/></button><div className="detail-title"><AppIcon><BriefcaseBusiness/></AppIcon><div><h1 dir="ltr">{opportunity.title_de}</h1><p>{opportunity.employer_name}</p><span><MapPin/> {opportunity.city}{opportunity.state?` · ${opportunity.state}`:""}</span><span><CalendarDays/> شروع: {opportunity.start_date||"در آگهی مشخص نشده"}</span><span><BadgeEuro/> {opportunity.monthly_salary_from?`${fa.format(opportunity.monthly_salary_from)} €`:"حقوق در آگهی مشخص نشده"}</span></div></div><div className="friendly-illustration compact"><GraduationCap/></div></div></section><section className="page-surface container detail-content"><article className="content-card"><h2>درباره دوره</h2><p>{opportunity.description_fa}</p></article><article className="content-card"><h2>شرایط ثبت‌شده در آگهی</h2><ul className="check-list"><li>زبان آلمانی {opportunity.required_german_level}</li>{opportunity.education_requirement&&<li>{opportunity.education_requirement}</li>}<li>{opportunity.accepts_international?"پذیرش متقاضی بین‌المللی اعلام شده":"پذیرش بین‌المللی در منبع تأیید نشده"}</li></ul></article>{opportunity.skills.length>0&&<article className="content-card"><h2>مهارت‌های درج‌شده</h2><div className="tag-list">{opportunity.skills.map((x:string)=><span key={x}>{x}</span>)}</div></article>}{opportunity.application_mode==="internal"&&<p className="application-consent-note">در مرحله بعد، ارسال نام، ایمیل، اطلاعات مرتبط پروفایل و رزومه اصلی به شرکت این آگهی را جداگانه تأیید می‌کنید. <a href="/privacy">جزئیات حریم خصوصی</a></p>}<button className="primary-button wide-action" onClick={()=>onApply(opportunity)}>{opportunity.application_mode==="internal"?"ارسال درخواست مستقیم":"بازکردن صفحه درخواست کارفرما"} <ArrowLeft/></button><button type="button" className="detail-report-button" onClick={()=>onReport(opportunity)}>گزارش کلاهبرداری، لینک خراب، اطلاعات اشتباه یا فرصت منقضی</button></section></>; }
+ 
+ function GuidePage({meta,findCategory}:any){return <><BlueHero eyebrow="مسیرهای موجود در سامانه" title="راهنمای رشته‌ها" text="حوزه موردنظر را انتخاب کن و فقط فرصت‌های واقعی همان دسته را ببین." icon={<LayoutGrid/>}/><section className="page-surface container guide-grid"><article className="content-card"><h2>حوزه‌های آوسبیلدونگ</h2><div className="guide-categories">{meta.categories.map((category:any)=><button key={category.id} onClick={()=>findCategory(category.slug)}><AppIcon><GraduationCap/></AppIcon><span><b>{category.name_fa}</b><small dir="ltr">{category.name_de}</small></span><ChevronLeft/></button>)}</div>{meta.categories.length===0&&<p>هنوز دسته فعالی در سامانه ثبت نشده است.</p>}</article><article className="content-card"><h2>پیش از اقدام بررسی کن</h2><div className="document-row"><Check/>سطح زبان موردنیاز همان آگهی</div><div className="document-row"><Check/>تاریخ شروع و مهلت درخواست</div><div className="document-row"><Check/>شرایط مدرک تحصیلی و پذیرش بین‌المللی</div><div className="document-row"><Check/>نشانی صفحه رسمی درخواست کارفرما</div></article></section></>}
+ 
+ 
+ function ToolsPage({openCv,openCover,navigate,cvCompletion}:any){return <><BlueHero eyebrow="مدارک قابل ویرایش و ذخیره" title="رزومه و انگیزه‌نامه" text="اطلاعات را وارد کن، پیش‌نمایش بگیر و نسخه PDF چاپ کن." icon={<FileText/>}/><section className="page-surface container"><div className="tool-grid"><article className="tool-card blue"><AppIcon><FileText/></AppIcon><h2>رزومه آلمانی</h2><span>Lebenslauf</span><div className="progress"><i style={{width:`${cvCompletion}%`}}/></div><small>{fa.format(cvCompletion)}٪ تکمیل بر اساس فیلدهای ذخیره‌شده</small><button onClick={openCv}>ویرایش رزومه <ArrowLeft/></button></article><article className="tool-card green"><AppIcon tone="green"><FileCheck2/></AppIcon><h2>انگیزه‌نامه</h2><span>Anschreiben</span><p>قالب اولیه را با فرصت انتخاب‌شده بساز، ویرایش و ذخیره کن.</p><button onClick={openCover}>ساخت / ویرایش انگیزه‌نامه <ArrowLeft/></button></article></div><button className="interview-link" onClick={()=>navigate("interview")}><Mic/> تمرین مرحله‌ای مصاحبه <ChevronLeft/></button></section></>}
+ function BottomNav({view,navigate,openProfile}:any){const items:Array<[View,string,ReactNode]>=[["home","خانه",<House/>],["search","جست‌وجو",<Search/>],["applications","درخواست‌ها",<FileText/>],["tools","ابزارها",<BriefcaseBusiness/>]];return <nav className="bottom-nav">{items.map(([k,l,i])=><button key={k} className={view===k?"active":""} onClick={()=>navigate(k)}>{i}<span>{l}</span></button>)}<button onClick={openProfile}><UserRound/><span>پروفایل</span></button></nav>}
++function SiteFooter(){const links:Array<[LegalPageKey,string]>=[["privacy","حریم خصوصی"],["terms","شرایط استفاده"],["impressum","Impressum"],["resume-retention","نگهداری رزومه"]];return <footer className="site-footer"><div className="container"><span>© {new Date().getFullYear()} Ausbildung Match</span><nav aria-label="صفحات قانونی">{links.map(([key,label])=><a key={key} href={legalPaths[key]}>{label}</a>)}</nav></div></footer>}
+diff --git a/resources/js/components/AuthDialog.tsx b/resources/js/components/AuthDialog.tsx
+index b58f069..6f7855c 100644
+--- a/resources/js/components/AuthDialog.tsx
++++ b/resources/js/components/AuthDialog.tsx
+@@ -30,6 +30,8 @@ export default function AuthDialog({ onClose, onSuccess }: Props) {
+           email: data.get("email"),
+           password: data.get("password"),
+           password_confirmation: data.get("password_confirmation"),
++          accept_terms: data.get("accept_terms") === "on",
++          accept_privacy: data.get("accept_privacy") === "on",
+         };
+ 
+     try {
+@@ -72,6 +74,10 @@ export default function AuthDialog({ onClose, onSuccess }: Props) {
+           {mode === "register" && (
+             <label>تکرار رمز عبور<input name="password_confirmation" type="password" minLength={8} autoComplete="new-password" dir="ltr" required /></label>
+           )}
++          {mode === "register" && <>
++            <label className="check-line legal-consent"><input name="accept_terms" type="checkbox" required /> <span><a href="/terms" target="_blank">شرایط استفاده</a> را خوانده‌ام و می‌پذیرم.</span></label>
++            <label className="check-line legal-consent"><input name="accept_privacy" type="checkbox" required /> <span><a href="/privacy" target="_blank">سیاست حریم خصوصی</a> و پردازش داده‌های حساب را تأیید می‌کنم.</span></label>
++          </>}
+           {mode === "login" && <label className="check-line"><input name="remember" type="checkbox" /> مرا به خاطر بسپار</label>}
+           {mode === "login" && <a href="/forgot-password">رمز عبور را فراموش کرده‌اید؟</a>}
+           {error && <div className="form-error" role="alert">{error}</div>}
+diff --git a/resources/js/components/LegalPages.tsx b/resources/js/components/LegalPages.tsx
+new file mode 100644
+index 0000000..31f6014
+--- /dev/null
++++ b/resources/js/components/LegalPages.tsx
+@@ -0,0 +1,89 @@
++import type { ReactNode } from "react";
++import type { LegalConfig, LegalProvider } from "../types";
++
++export type LegalPageKey = "privacy" | "terms" | "impressum" | "resume-retention";
++
++type Props = { page: LegalPageKey; legal: LegalConfig };
++
++const missing = "در تنظیمات محیطی تکمیل شود";
++const value = (input: string | null) => input?.trim() || missing;
++
++function Contact({ provider, privacy = false }: { provider: LegalProvider; privacy?: boolean }) {
++  return (
++    <address className="legal-address">
++      <strong>{value(provider.name)}</strong>
++      <span>{[provider.street_address, provider.postal_code, provider.city, provider.country].filter(Boolean).join("، ") || missing}</span>
++      <span>ایمیل: {value(privacy ? provider.data_protection_email || provider.email : provider.email)}</span>
++      {provider.phone && <span>تلفن: {provider.phone}</span>}
++    </address>
++  );
++}
++
++export default function LegalPages({ page, legal }: Props) {
++  const p = legal.provider;
++  const incomplete = !p.name || !p.street_address || !p.city || !p.email;
++
++  if (page === "privacy") return (
++    <LegalShell title="سیاست حریم خصوصی" subtitle={`نسخه ${legal.privacy_version}`}>
++      <h2>۱. مسئول پردازش اطلاعات</h2><Contact provider={p} privacy />
++      <h2>۲. چه اطلاعاتی پردازش می‌شود؟</h2>
++      <p>اطلاعات حساب و تماس، وضعیت تأیید ایمیل، پروفایل تحصیلی و شغلی، رزومه و داده‌های استخراج‌شده از آن، علاقه‌مندی‌ها، درخواست‌های شغلی، پیام متقاضی و داده‌های فنی و امنیتی ضروری مانند نشانی IP و گزارش خطا پردازش می‌شوند.</p>
++      <h2>۳. هدف و مبنای پردازش</h2>
++      <ul><li>ساخت و ایمن‌سازی حساب و ارائه قابلیت‌های قراردادی سرویس؛</li><li>تطبیق فرصت‌ها و ساخت مدارک بنا بر درخواست کاربر؛</li><li>نگهداری رزومه با رضایت صریح کاربر؛</li><li>ارسال اطلاعات به کارفرمای مشخص فقط پس از تأیید جداگانه کاربر؛</li><li>پیشگیری از سوءاستفاده و رعایت تکالیف قانونی و منافع مشروع امنیتی.</li></ul>
++      <h2>۴. دریافت‌کنندگان و انتقال داده</h2>
++      <p>اطلاعات فقط به ارائه‌دهندگان فنی ضروری (مانند میزبانی و ایمیل) و، هنگام درخواست مستقیم، به شرکت آگهی‌دهنده منتقل می‌شود. اطلاعات فروخته نمی‌شود. هر انتقال برون‌مرزی باید با سازوکار معتبر حفاظت از داده و قرارداد مناسب انجام شود.</p>
++      <h2>۵. مدت نگهداری</h2>
++      <p>رزومه حداکثر {legal.resume_retention_days} روز پس از بارگذاری نگهداری و سپس به‌طور خودکار حذف می‌شود، مگر الزام قانونی معتبر یا درخواست زودتر کاربر وجود داشته باشد. داده‌های حساب تا حذف حساب یا پایان نیاز قراردادی و داده‌های امنیتی فقط به مدت ضروری نگهداری می‌شوند.</p>
++      <h2>۶. تطبیق خودکار</h2>
++      <p>امتیاز تطبیق، پیشنهاد توضیح‌پذیر بر پایه فیلدهای پروفایل و آگهی است و تصمیم استخدامی یا تصمیم حقوقی خودکار محسوب نمی‌شود. تصمیم نهایی با کاربر و کارفرماست.</p>
++      <h2>۷. کوکی‌ها و امنیت</h2><p>کوکی‌های Session و CSRF برای ورود امن و جلوگیری از جعل درخواست استفاده می‌شوند. این کوکی‌های ضروری برای عملکرد حساب لازم‌اند. دسترسی به فایل رزومه عمومی نیست و کنترل دسترسی سمت سرور اعمال می‌شود.</p>
++      <h2>۸. حقوق شما</h2>
++      <p>در چارچوب GDPR می‌توانید دسترسی، اصلاح، حذف، محدودسازی، قابلیت انتقال داده و اعتراض را درخواست کنید. رضایت را می‌توان برای آینده پس گرفت. همچنین حق شکایت نزد مرجع ناظر حفاظت از داده محل اقامت یا محل فعالیت مسئول پردازش محفوظ است.</p>
++      <h2>۹. تماس و تغییرات</h2><p>درخواست‌های حریم خصوصی را به نشانی زیر بفرستید. تغییرات اساسی همراه با نسخه و تاریخ جدید اعلام می‌شوند.</p><Contact provider={p} privacy />
++    </LegalShell>
++  );
++
++  if (page === "terms") return (
++    <LegalShell title="شرایط استفاده" subtitle={`نسخه ${legal.terms_version}`}>
++      <h2>۱. موضوع سرویس</h2><p>Ausbildung Match ابزار جست‌وجو، تطبیق اولیه، آماده‌سازی مدارک و مدیریت درخواست‌هاست. سرویس، مؤسسه کاریابی رسمی یا مشاور حقوقی/مهاجرتی نیست و پذیرش، ویزا یا استخدام را تضمین نمی‌کند.</p>
++      <h2>۲. حساب کاربری</h2><p>کاربر باید اطلاعات درست و به‌روز ارائه کند، از دسترسی حساب محافظت کند و سوءاستفاده را فوراً گزارش دهد. استفاده غیرقانونی، جعل هویت، جمع‌آوری خودکار مخرب، دورزدن کنترل‌های امنیتی و انتشار محتوای ناقض حقوق دیگران ممنوع است.</p>
++      <h2>۳. محتوای کاربر و درخواست‌ها</h2><p>مالکیت رزومه و محتوای کاربر برای او باقی می‌ماند. کاربر فقط مجوز محدود لازم برای ذخیره، پردازش و ارسال انتخاب‌شده را به سرویس می‌دهد. مسئولیت صحت و مجازبودن اطلاعات ارسالی با کاربر است.</p>
++      <h2>۴. کارفرمایان و آگهی‌ها</h2><p>کارفرما باید هویت، شرکت و آگهی‌های خود را درست معرفی کند. انتشار آگهی منوط به تأیید شرکت است. امکان حذف آگهی گمراه‌کننده، تعلیق حساب و بررسی گزارش تخلف وجود دارد.</p>
++      <h2>۵. منابع و پیوندهای بیرونی</h2><p>آگهی‌ها ممکن است از منابع ثالث باشند. جزئیات، مهلت و شرایط را پیش از اقدام در منبع رسمی کنترل کنید؛ مسئولیت محتوای وب‌سایت‌های ثالث با همان ارائه‌دهنده است.</p>
++      <h2>۶. دسترس‌پذیری و مسئولیت</h2><p>برای پایداری و صحت سرویس تلاش می‌شود، اما دسترسی بدون وقفه یا نتیجه مشخص تضمین نمی‌شود. محدودیت مسئولیت، موارد عمد، تقصیر سنگین، آسیب جسمی و حقوقی را که قانوناً قابل محدودکردن نیستند شامل نمی‌شود.</p>
++      <h2>۷. پایان استفاده و تغییر شرایط</h2><p>کاربر می‌تواند استفاده را متوقف و حذف داده را درخواست کند. در صورت نقض شرایط یا خطر امنیتی، دسترسی ممکن است محدود شود. تغییرات مهم با نسخه جدید و، هرجا لازم باشد، اخذ پذیرش تازه اعمال می‌شوند.</p>
++      <h2>۸. قانون و تماس</h2><p>قانون آلمان با حفظ حمایت‌های اجباری مصرف‌کننده در کشور محل اقامت اعمال می‌شود. برای پرسش‌های قراردادی با ارائه‌دهنده تماس بگیرید.</p><Contact provider={p} />
++    </LegalShell>
++  );
++
++  if (page === "resume-retention") return (
++    <LegalShell title="سیاست نگهداری رزومه" subtitle={`دوره استاندارد: ${legal.resume_retention_days} روز`}>
++      <h2>دامنه و رضایت</h2><p>بارگذاری رزومه اختیاری است و فقط پس از علامت‌زدن رضایت جداگانه انجام می‌شود. زمان رضایت و تاریخ انقضای هر فایل ثبت می‌گردد.</p>
++      <h2>نگهداری و حذف</h2><p>فایل در فضای خصوصی ذخیره و حداکثر {legal.resume_retention_days} روز پس از بارگذاری به‌صورت خودکار حذف می‌شود. کاربر می‌تواند هر زمان زودتر آن را از پروفایل حذف کند. نسخه‌های پشتیبان محدود ممکن است تا چرخه حذف فنی باقی بمانند و در این مدت برای استفاده عادی بازیابی نمی‌شوند.</p>
++      <h2>اشتراک‌گذاری با کارفرما</h2><p>آپلود رزومه به‌تنهایی به معنی ارسال آن نیست. در درخواست مستقیم، نام، ایمیل، اطلاعات مرتبط پروفایل، پیام و رزومه اصلی فقط پس از رضایت صریح جداگانه در اختیار شرکت همان آگهی قرار می‌گیرد. پس از دریافت، نگهداری نسخه کارفرما تابع سیاست و تکالیف قانونی همان شرکت است.</p>
++      <h2>پس‌گرفتن رضایت</h2><p>رضایت را می‌توان برای آینده پس گرفت و فایل را حذف کرد؛ این کار قانونی‌بودن پردازش پیش از پس‌گرفتن را تغییر نمی‌دهد. برای درخواست تکمیلی با مسئول حفاظت از داده تماس بگیرید.</p><Contact provider={p} privacy />
++    </LegalShell>
++  );
++
++  return (
++    <LegalShell title="Impressum" subtitle="Angaben gemäß § 5 DDG">
++      {incomplete && <div className="legal-warning" role="alert">اطلاعات الزامی ارائه‌دهنده هنوز کامل نیست. پیش از انتشار عمومی، متغیرهای LEGAL_PROVIDER_* در محیط production تکمیل و متن توسط مشاور حقوقی بررسی شود.</div>}
++      <h2>Anbieter / Diensteanbieter</h2><Contact provider={p} />
++      <dl className="legal-details">
++        <div><dt>Rechtsform</dt><dd>{value(p.legal_form)}</dd></div>
++        <div><dt>Vertretungsberechtigte Person</dt><dd>{value(p.representative)}</dd></div>
++        <div><dt>Register</dt><dd>{value(p.register_name)}</dd></div>
++        <div><dt>Registernummer</dt><dd>{value(p.register_number)}</dd></div>
++        <div><dt>USt-IdNr.</dt><dd>{value(p.vat_id)}</dd></div>
++        <div><dt>Zuständige Aufsichtsbehörde (falls erforderlich)</dt><dd>{value(p.supervisory_authority)}</dd></div>
++        <div><dt>Inhaltlich verantwortlich</dt><dd>{value(p.responsible_content)}</dd></div>
++      </dl>
++      <h2>Kontakt</h2><p>E-Mail: {value(p.email)}{p.phone ? ` · Telefon: ${p.phone}` : ""}</p>
++      <h2>Hinweis</h2><p>اطلاعات این صفحه باید با شکل حقوقی، مجوزها، ثبت تجاری و وضعیت مالیاتی واقعی ارائه‌دهنده تطبیق داده شود. فیلدهای نامرتبط را می‌توان پس از بررسی حقوقی حذف کرد.</p>
++    </LegalShell>
++  );
++}
++
++function LegalShell({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
++  return <section className="legal-page container"><header><span>{subtitle}</span><h1>{title}</h1><p>آخرین به‌روزرسانی: ۲۷ شهریور ۱۴۰۵ / ۱۸ سپتامبر ۲۰۲۶</p></header><article>{children}</article></section>;
++}
+diff --git a/resources/js/components/ProfileDrawer.tsx b/resources/js/components/ProfileDrawer.tsx
+index e98271a..c2af4bc 100644
+--- a/resources/js/components/ProfileDrawer.tsx
++++ b/resources/js/components/ProfileDrawer.tsx
+@@ -35,6 +35,7 @@ export default function ProfileDrawer({ meta, onClose, onSaved }: Props) {
+   const [busy, setBusy] = useState(false);
+   const [message, setMessage] = useState("");
+   const [error, setError] = useState("");
++  const [resumeConsent, setResumeConsent] = useState(false);
+ 
+   useEffect(() => {
+     Promise.all([
+@@ -90,16 +91,23 @@ export default function ProfileDrawer({ meta, onClose, onSaved }: Props) {
+   async function uploadResume(event: ChangeEvent<HTMLInputElement>) {
+     const file = event.target.files?.[0];
+     if (!file) return;
++    if (!resumeConsent) {
++      setError("برای بارگذاری، رضایت پردازش و نگهداری رزومه را تأیید کنید.");
++      event.target.value = "";
++      return;
++    }
+     setBusy(true);
+     setMessage("");
+     setError("");
+     const body = new FormData();
+     body.append("resume", file);
++    body.append("consent_resume_processing", "1");
+ 
+     try {
+       const response = await api<{ message: string; resume: Resume }>("/resumes", { method: "POST", body });
+       setResumes((current) => [response.resume, ...current.map((resume) => ({ ...resume, is_primary: false }))]);
+       setMessage(response.message);
++      setResumeConsent(false);
+     } catch (exception) {
+       const first = exception instanceof ApiError ? Object.values(exception.errors)[0]?.[0] : null;
+       setError(first || "بارگذاری رزومه انجام نشد.");
+@@ -176,10 +184,11 @@ export default function ProfileDrawer({ meta, onClose, onSaved }: Props) {
+ 
+             <section className="resume-box">
+               <div><FileText /><div><strong>رزومه فعلی</strong><span>فایل PDF یا Word، حداکثر ۵ مگابایت</span></div></div>
++              <label className="check-line legal-consent"><input type="checkbox" checked={resumeConsent} onChange={(event) => setResumeConsent(event.target.checked)} /> <span>با پردازش خصوصی و حذف خودکار فایل پس از {meta.legal.resume_retention_days} روز موافقم؛ <a href="/resume-retention" target="_blank">سیاست نگهداری رزومه</a> را خوانده‌ام.</span></label>
+               <label className="upload-button"><Upload size={17} /> انتخاب فایل<input type="file" accept=".pdf,.doc,.docx" onChange={uploadResume} disabled={busy} /></label>
+               {resumes.map((resume) => (
+                 <div className="resume-row" key={resume.id}>
+-                  <span>{resume.original_name} {resume.is_primary && <small>اصلی</small>}</span>
++                  <span>{resume.original_name} {resume.is_primary && <small>اصلی</small>}{resume.retention_until && <small>حذف خودکار: {new Date(resume.retention_until).toLocaleDateString("fa-IR")}</small>}</span>
+                   <button type="button" onClick={() => removeResume(resume.id)} aria-label="حذف رزومه"><Trash2 size={17} /></button>
+                 </div>
+               ))}
+diff --git a/resources/js/types.ts b/resources/js/types.ts
+index 49531cc..ae43617 100644
+--- a/resources/js/types.ts
++++ b/resources/js/types.ts
+@@ -19,6 +19,32 @@ export type Meta = {
+   categories: Category[];
+   cities: string[];
+   german_levels: string[];
++  legal: LegalConfig;
++};
++
++export type LegalProvider = {
++  name: string | null;
++  legal_form: string | null;
++  representative: string | null;
++  street_address: string | null;
++  postal_code: string | null;
++  city: string | null;
++  country: string | null;
++  email: string | null;
++  phone: string | null;
++  register_name: string | null;
++  register_number: string | null;
++  vat_id: string | null;
++  supervisory_authority: string | null;
++  responsible_content: string | null;
++  data_protection_email: string | null;
++};
++
++export type LegalConfig = {
++  terms_version: string;
++  privacy_version: string;
++  resume_retention_days: number;
++  provider: LegalProvider;
+ };
+ 
+ export type Opportunity = {
+@@ -89,6 +115,7 @@ export type Resume = {
+   status: string;
+   is_primary: boolean;
+   created_at: string;
++  retention_until: string | null;
+ };
+ 
+ export type GermanCv = {
+diff --git a/routes/console.php b/routes/console.php
+index 4870174..3895fce 100644
+--- a/routes/console.php
++++ b/routes/console.php
+@@ -10,3 +10,7 @@ Schedule::command('opportunities:weekly-digest')
+     ->weeklyOn(1, '08:00')
+     ->timezone('Europe/Berlin')
+     ->withoutOverlapping();
++
++Schedule::command('resumes:purge-expired')
++    ->dailyAt('03:00')
++    ->withoutOverlapping();
+diff --git a/tests/Feature/AuthenticationTest.php b/tests/Feature/AuthenticationTest.php
+index bf97d35..f0751ca 100644
+--- a/tests/Feature/AuthenticationTest.php
++++ b/tests/Feature/AuthenticationTest.php
+@@ -32,6 +32,8 @@ class AuthenticationTest extends TestCase
+             'email' => 'sara@example.com',
+             'password' => 'secret123',
+             'password_confirmation' => 'secret123',
++            'accept_terms' => true,
++            'accept_privacy' => true,
+         ]);
+ 
+         $response
+diff --git a/tests/Feature/EmailAndPasswordSecurityTest.php b/tests/Feature/EmailAndPasswordSecurityTest.php
+index 1fc2d96..79eb828 100644
+--- a/tests/Feature/EmailAndPasswordSecurityTest.php
++++ b/tests/Feature/EmailAndPasswordSecurityTest.php
+@@ -28,6 +28,7 @@ class EmailAndPasswordSecurityTest extends TestCase
+         $this->postJson('/api/v1/auth/register', [
+             'name' => 'Sara', 'email' => 'sara@example.com',
+             'password' => 'secret123', 'password_confirmation' => 'secret123',
++            'accept_terms' => true, 'accept_privacy' => true,
+         ])->assertCreated()->assertJsonPath('user.email_verified', false);
+ 
+         $user = User::where('email', 'sara@example.com')->firstOrFail();
+diff --git a/tests/Feature/EmployerWorkflowTest.php b/tests/Feature/EmployerWorkflowTest.php
+index 2ab67d5..d6161dd 100644
+--- a/tests/Feature/EmployerWorkflowTest.php
++++ b/tests/Feature/EmployerWorkflowTest.php
+@@ -103,7 +103,10 @@ class EmployerWorkflowTest extends TestCase
+         $candidate = User::factory()->create();
+ 
+         $applicationResponse = $this->actingAs($candidate)
+-            ->postJson("/api/v1/applications/{$opportunity->slug}", ['candidate_message' => 'برای این دوره انگیزه زیادی دارم.'])
++            ->postJson("/api/v1/applications/{$opportunity->slug}", [
++                'candidate_message' => 'برای این دوره انگیزه زیادی دارم.',
++                'consent_data_sharing' => true,
++            ])
+             ->assertCreated()
+             ->assertJsonPath('application.status', 'applied')
+             ->assertJsonPath('application.managed_by_employer', true);
+@@ -141,6 +144,7 @@ class EmployerWorkflowTest extends TestCase
+             'opportunity_id' => $opportunity->id,
+             'status' => 'applied',
+             'applied_at' => now(),
++            'data_sharing_consent_at' => now(),
+         ]);
+         $otherEmployer = User::factory()->create();
+         Company::factory()->for($otherEmployer, 'owner')->create();
+@@ -170,6 +174,7 @@ class EmployerWorkflowTest extends TestCase
+             'opportunity_id' => $opportunity->id,
+             'status' => 'applied',
+             'applied_at' => now(),
++            'data_sharing_consent_at' => now(),
+         ]);
+         Storage::disk('local')->put('resumes/candidate.pdf', 'private resume');
+         Resume::query()->create([
+diff --git a/tests/Feature/LegalConsentTest.php b/tests/Feature/LegalConsentTest.php
+new file mode 100644
+index 0000000..33ff7d6
+--- /dev/null
++++ b/tests/Feature/LegalConsentTest.php
+@@ -0,0 +1,131 @@
++<?php
++
++namespace Tests\Feature;
++
++use App\Models\Application;
++use App\Models\Company;
++use App\Models\Opportunity;
++use App\Models\Resume;
++use App\Models\User;
++use Illuminate\Foundation\Testing\RefreshDatabase;
++use Illuminate\Http\UploadedFile;
++use Illuminate\Support\Facades\Notification;
++use Illuminate\Support\Facades\Storage;
++use Tests\TestCase;
++
++class LegalConsentTest extends TestCase
++{
++    use RefreshDatabase;
++
++    public function test_registration_requires_and_records_separate_legal_acceptances(): void
++    {
++        Notification::fake();
++        $payload = [
++            'name' => 'Sara Ahmadi',
++            'email' => 'sara@example.com',
++            'password' => 'secret123',
++            'password_confirmation' => 'secret123',
++        ];
++
++        $this->postJson('/api/v1/auth/register', $payload)
++            ->assertUnprocessable()
++            ->assertJsonValidationErrors(['accept_terms', 'accept_privacy']);
++
++        $this->postJson('/api/v1/auth/register', [
++            ...$payload,
++            'accept_terms' => true,
++            'accept_privacy' => true,
++        ])->assertCreated();
++
++        $user = User::query()->where('email', 'sara@example.com')->firstOrFail();
++        $this->assertNotNull($user->terms_accepted_at);
++        $this->assertNotNull($user->privacy_accepted_at);
++        $this->assertSame(config('legal.terms_version'), $user->terms_version);
++        $this->assertSame(config('legal.privacy_version'), $user->privacy_version);
++    }
++
++    public function test_resume_upload_requires_consent_and_gets_a_retention_deadline(): void
++    {
++        Storage::fake('local');
++        $user = User::factory()->create();
++
++        $this->actingAs($user)->postJson('/api/v1/resumes', [
++            'resume' => UploadedFile::fake()->create('lebenslauf.pdf', 100, 'application/pdf'),
++        ])->assertUnprocessable()->assertJsonValidationErrors('consent_resume_processing');
++
++        $this->actingAs($user)->postJson('/api/v1/resumes', [
++            'resume' => UploadedFile::fake()->create('lebenslauf.pdf', 100, 'application/pdf'),
++            'consent_resume_processing' => true,
++        ])->assertCreated();
++
++        $resume = Resume::query()->firstOrFail();
++        $this->assertNotNull($resume->processing_consent_at);
++        $this->assertTrue($resume->retention_until->between(
++            now()->addDays(config('legal.resume_retention_days'))->subMinute(),
++            now()->addDays(config('legal.resume_retention_days'))->addMinute(),
++        ));
++    }
++
++    public function test_direct_application_requires_and_records_data_sharing_consent(): void
++    {
++        $company = Company::factory()->for(User::factory(), 'owner')->create();
++        $opportunity = Opportunity::factory()->create([
++            'company_id' => $company->id,
++            'application_url' => null,
++        ]);
++        $candidate = User::factory()->create();
++
++        $this->actingAs($candidate)
++            ->postJson("/api/v1/applications/{$opportunity->slug}")
++            ->assertUnprocessable()
++            ->assertJsonValidationErrors('consent_data_sharing');
++
++        $this->actingAs($candidate)
++            ->postJson("/api/v1/applications/{$opportunity->slug}", ['consent_data_sharing' => true])
++            ->assertCreated();
++
++        $this->assertNotNull(Application::query()->firstOrFail()->data_sharing_consent_at);
++    }
++
++    public function test_expired_resume_files_and_records_are_purged(): void
++    {
++        Storage::fake('local');
++        $user = User::factory()->create();
++        Storage::disk('local')->put('resumes/expired.pdf', 'expired');
++        Storage::disk('local')->put('resumes/current.pdf', 'current');
++
++        $base = [
++            'user_id' => $user->id,
++            'original_name' => 'lebenslauf.pdf',
++            'disk' => 'local',
++            'mime_type' => 'application/pdf',
++            'size_bytes' => 7,
++            'status' => 'uploaded',
++            'is_primary' => false,
++            'processing_consent_at' => now(),
++        ];
++        $expired = Resume::query()->create([
++            ...$base, 'path' => 'resumes/expired.pdf', 'retention_until' => now()->subMinute(),
++        ]);
++        $current = Resume::query()->create([
++            ...$base, 'path' => 'resumes/current.pdf', 'retention_until' => now()->addDay(),
++        ]);
++
++        $this->artisan('resumes:purge-expired')->assertSuccessful();
++
++        $this->assertModelMissing($expired);
++        $this->assertModelExists($current);
++        Storage::disk('local')->assertMissing('resumes/expired.pdf');
++        Storage::disk('local')->assertExists('resumes/current.pdf');
++    }
++
++    public function test_meta_exposes_public_legal_configuration(): void
++    {
++        config(['legal.provider.name' => 'Example GmbH']);
++
++        $this->getJson('/api/v1/meta')
++            ->assertOk()
++            ->assertJsonPath('legal.provider.name', 'Example GmbH')
++            ->assertJsonPath('legal.resume_retention_days', 180);
++    }
++}

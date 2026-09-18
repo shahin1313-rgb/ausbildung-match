@@ -19,6 +19,7 @@ class EmployerApplicantController extends Controller
         $this->authorizeOpportunity($request, $opportunity);
         $applications = $opportunity->applications()
             ->where('status', '!=', 'opened')
+            ->whereNotNull('data_sharing_consent_at')
             ->with(['user.profile', 'user.resumes'])
             ->latest('applied_at')
             ->get();
@@ -67,5 +68,6 @@ class EmployerApplicantController extends Controller
     {
         $application->loadMissing('opportunity');
         $this->authorizeOpportunity($request, $application->opportunity);
+        abort_unless($application->data_sharing_consent_at, 404);
     }
 }

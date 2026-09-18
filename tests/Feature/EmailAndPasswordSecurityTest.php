@@ -28,6 +28,7 @@ class EmailAndPasswordSecurityTest extends TestCase
         $this->postJson('/api/v1/auth/register', [
             'name' => 'Sara', 'email' => 'sara@example.com',
             'password' => 'secret123', 'password_confirmation' => 'secret123',
+            'accept_terms' => true, 'accept_privacy' => true,
         ])->assertCreated()->assertJsonPath('user.email_verified', false);
 
         $user = User::where('email', 'sara@example.com')->firstOrFail();

@@ -19,6 +19,32 @@ export type Meta = {
   categories: Category[];
   cities: string[];
   german_levels: string[];
+  legal: LegalConfig;
+};
+
+export type LegalProvider = {
+  name: string | null;
+  legal_form: string | null;
+  representative: string | null;
+  street_address: string | null;
+  postal_code: string | null;
+  city: string | null;
+  country: string | null;
+  email: string | null;
+  phone: string | null;
+  register_name: string | null;
+  register_number: string | null;
+  vat_id: string | null;
+  supervisory_authority: string | null;
+  responsible_content: string | null;
+  data_protection_email: string | null;
+};
+
+export type LegalConfig = {
+  terms_version: string;
+  privacy_version: string;
+  resume_retention_days: number;
+  provider: LegalProvider;
 };
 
 export type Opportunity = {
@@ -89,6 +115,7 @@ export type Resume = {
   status: string;
   is_primary: boolean;
   created_at: string;
+  retention_until: string | null;
 };
 
 export type GermanCv = {

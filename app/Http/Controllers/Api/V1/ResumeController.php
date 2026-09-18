@@ -43,6 +43,8 @@ class ResumeController extends Controller
                     'size_bytes' => $file->getSize(),
                     'status' => 'uploaded',
                     'is_primary' => true,
+                    'processing_consent_at' => now(),
+                    'retention_until' => now()->addDays(max(1, (int) config('legal.resume_retention_days', 180))),
                 ]);
             });
         } catch (Throwable $exception) {

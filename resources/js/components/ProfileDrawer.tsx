@@ -35,6 +35,7 @@ export default function ProfileDrawer({ meta, onClose, onSaved }: Props) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [resumeConsent, setResumeConsent] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -90,16 +91,23 @@ export default function ProfileDrawer({ meta, onClose, onSaved }: Props) {
   async function uploadResume(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (!resumeConsent) {
+      setError("برای بارگذاری، رضایت پردازش و نگهداری رزومه را تأیید کنید.");
+      event.target.value = "";
+      return;
+    }
     setBusy(true);
     setMessage("");
     setError("");
     const body = new FormData();
     body.append("resume", file);
+    body.append("consent_resume_processing", "1");
 
     try {
       const response = await api<{ message: string; resume: Resume }>("/resumes", { method: "POST", body });
       setResumes((current) => [response.resume, ...current.map((resume) => ({ ...resume, is_primary: false }))]);
       setMessage(response.message);
+      setResumeConsent(false);
     } catch (exception) {
       const first = exception instanceof ApiError ? Object.values(exception.errors)[0]?.[0] : null;
       setError(first || "بارگذاری رزومه انجام نشد.");
@@ -176,10 +184,11 @@ export default function ProfileDrawer({ meta, onClose, onSaved }: Props) {
 
             <section className="resume-box">
               <div><FileText /><div><strong>رزومه فعلی</strong><span>فایل PDF یا Word، حداکثر ۵ مگابایت</span></div></div>
+              <label className="check-line legal-consent"><input type="checkbox" checked={resumeConsent} onChange={(event) => setResumeConsent(event.target.checked)} /> <span>با پردازش خصوصی و حذف خودکار فایل پس از {meta.legal.resume_retention_days} روز موافقم؛ <a href="/resume-retention" target="_blank">سیاست نگهداری رزومه</a> را خوانده‌ام.</span></label>
               <label className="upload-button"><Upload size={17} /> انتخاب فایل<input type="file" accept=".pdf,.doc,.docx" onChange={uploadResume} disabled={busy} /></label>
               {resumes.map((resume) => (
                 <div className="resume-row" key={resume.id}>
-                  <span>{resume.original_name} {resume.is_primary && <small>اصلی</small>}</span>
+                  <span>{resume.original_name} {resume.is_primary && <small>اصلی</small>}{resume.retention_until && <small>حذف خودکار: {new Date(resume.retention_until).toLocaleDateString("fa-IR")}</small>}</span>
                   <button type="button" onClick={() => removeResume(resume.id)} aria-label="حذف رزومه"><Trash2 size={17} /></button>
                 </div>
               ))}

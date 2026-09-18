@@ -20,6 +20,7 @@ class Application extends Model
         'interview_at',
         'notes',
         'candidate_message',
+        'data_sharing_consent_at',
     ];
 
     protected function casts(): array
@@ -27,6 +28,7 @@ class Application extends Model
         return [
             'applied_at' => 'datetime',
             'interview_at' => 'datetime',
+            'data_sharing_consent_at' => 'datetime',
         ];
     }
 

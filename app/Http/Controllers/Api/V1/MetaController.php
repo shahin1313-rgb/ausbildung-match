@@ -23,6 +23,12 @@ class MetaController extends Controller
                 ->orderBy('city')
                 ->pluck('city'),
             'german_levels' => ['A2', 'B1', 'B2', 'C1'],
+            'legal' => [
+                'terms_version' => config('legal.terms_version'),
+                'privacy_version' => config('legal.privacy_version'),
+                'resume_retention_days' => max(1, (int) config('legal.resume_retention_days')),
+                'provider' => config('legal.provider'),
+            ],
         ]);
     }
 }

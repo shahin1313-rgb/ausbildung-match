@@ -41,6 +41,7 @@ class ApplicationController extends Controller
             abort_if($request->user()->company?->id === $opportunity->company_id, 422, 'نمی‌توانید برای فرصت شرکت خودتان درخواست ارسال کنید.');
             $validated = $request->validate([
                 'candidate_message' => ['nullable', 'string', 'max:3000'],
+                'consent_data_sharing' => ['required', 'accepted'],
             ]);
             $application = $request->user()->applications()->updateOrCreate(
                 ['opportunity_id' => $opportunity->id],
@@ -48,6 +49,7 @@ class ApplicationController extends Controller
                     'status' => 'applied',
                     'applied_at' => now(),
                     'candidate_message' => $validated['candidate_message'] ?? null,
+                    'data_sharing_consent_at' => now(),
                 ]
             );
 

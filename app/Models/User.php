@@ -31,6 +31,10 @@ class User extends Authenticatable implements FilamentUser, HasAppAuthentication
         'password',
         'is_admin',
         'email_verified_at',
+        'terms_accepted_at',
+        'privacy_accepted_at',
+        'terms_version',
+        'privacy_version',
     ];
 
     protected $hidden = [
@@ -44,6 +48,8 @@ class User extends Authenticatable implements FilamentUser, HasAppAuthentication
     {
         return [
             'email_verified_at' => 'datetime',
+            'terms_accepted_at' => 'datetime',
+            'privacy_accepted_at' => 'datetime',
             'password' => 'hashed',
             'is_admin' => 'boolean',
         ];

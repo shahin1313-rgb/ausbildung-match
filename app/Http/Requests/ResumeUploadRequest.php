@@ -19,6 +19,7 @@ class ResumeUploadRequest extends FormRequest
                 'required',
                 File::types(['pdf', 'doc', 'docx'])->max(5 * 1024),
             ],
+            'consent_resume_processing' => ['required', 'accepted'],
         ];
     }
 }
