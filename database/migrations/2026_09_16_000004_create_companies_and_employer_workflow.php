@@ -19,7 +19,9 @@ return new class extends Migration
             $table->string('city');
             $table->string('address')->nullable();
             $table->text('description')->nullable();
-            $table->enum('status', ['active', 'suspended'])->default('active')->index();
+            $table->enum('status', ['pending', 'under_review', 'verified', 'suspended'])
+                ->default('pending')
+                ->index();
             $table->timestamps();
         });
 

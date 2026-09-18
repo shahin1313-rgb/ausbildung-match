@@ -120,7 +120,9 @@ export type Application = {
 export type Company = {
   id: number; name: string; legal_name: string | null; website: string | null;
   contact_email: string; phone: string | null; city: string; address: string | null;
-  description: string | null; status: "active" | "suspended";
+  description: string | null; status: "pending" | "under_review" | "verified" | "suspended";
+  verification_method: "admin_review" | "email_domain" | "documents" | null;
+  verified_at: string | null;
 };
 
 export type EmployerOpportunity = {

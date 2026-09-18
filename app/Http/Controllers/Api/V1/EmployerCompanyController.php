@@ -23,10 +23,13 @@ class EmployerCompanyController extends Controller
     {
         abort_if($request->user()->company()->exists(), 409, 'برای این حساب قبلاً یک شرکت ثبت شده است.');
 
-        $company = $request->user()->company()->create($request->validated());
+        $company = $request->user()->company()->create([
+            ...$request->validated(),
+            'status' => 'pending',
+        ]);
 
         return response()->json([
-            'message' => 'شرکت با موفقیت ثبت شد.',
+            'message' => 'شرکت ثبت شد و پس از تأیید مدیر امکان انتشار فرصت فعال می‌شود.',
             'company' => new CompanyResource($company),
         ], 201);
     }

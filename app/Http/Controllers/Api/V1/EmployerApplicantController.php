@@ -57,7 +57,8 @@ class EmployerApplicantController extends Controller
     private function authorizeOpportunity(Request $request, Opportunity $opportunity): void
     {
         abort_unless(
-            $request->user()->company && $opportunity->company_id === $request->user()->company->id,
+            $request->user()->company?->isVerified()
+                && $opportunity->company_id === $request->user()->company->id,
             404
         );
     }

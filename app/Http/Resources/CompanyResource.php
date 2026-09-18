@@ -20,6 +20,8 @@ class CompanyResource extends JsonResource
             'address' => $this->address,
             'description' => $this->description,
             'status' => $this->status,
+            'verification_method' => $this->verification_method,
+            'verified_at' => $this->verified_at?->toIso8601String(),
         ];
     }
 }

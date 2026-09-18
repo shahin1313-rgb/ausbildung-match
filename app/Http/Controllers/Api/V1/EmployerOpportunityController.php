@@ -61,7 +61,7 @@ class EmployerOpportunityController extends Controller
     private function company(Request $request): Company
     {
         $company = $request->user()->company;
-        abort_unless($company && $company->status === 'active', 403, 'ابتدا شرکت فعال خود را ثبت کنید.');
+        abort_unless($company && $company->isVerified(), 403, 'شرکت شما هنوز تأیید نشده است. پس از تأیید مدیر امکان مدیریت فرصت‌ها فعال می‌شود.');
 
         return $company;
     }

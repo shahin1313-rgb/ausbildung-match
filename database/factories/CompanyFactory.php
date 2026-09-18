@@ -23,7 +23,9 @@ class CompanyFactory extends Factory
             'city' => fake()->randomElement(['Berlin', 'Hamburg', 'München', 'Köln']),
             'address' => fake()->address(),
             'description' => fake()->paragraph(),
-            'status' => 'active',
+            'status' => 'verified',
+            'verification_method' => 'admin_review',
+            'verified_at' => now(),
         ];
     }
 }

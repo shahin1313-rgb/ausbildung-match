@@ -45,7 +45,7 @@ export default function EmployerDashboard({ user, meta, onLogin }: Props) {
     try {
       const response = await api<{ company: Company | null }>("/employer/company");
       setCompany(response.company);
-      if (response.company) await loadOpportunities();
+      if (response.company?.status === "verified") await loadOpportunities();
     } catch (exception) { setError(errorMessage(exception)); }
     finally { setLoading(false); }
   }, [loadOpportunities, user]);
@@ -59,8 +59,8 @@ export default function EmployerDashboard({ user, meta, onLogin }: Props) {
       const response = await api<{ company: Company; message: string }>("/employer/company", {
         method: company ? "PUT" : "POST", ...jsonBody(data),
       });
-      setCompany(response.company); setMessage(response.message); setTab("opportunities");
-      await loadOpportunities();
+      setCompany(response.company); setMessage(response.message); setTab(response.company.status === "verified" ? "opportunities" : "company");
+      if (response.company.status === "verified") await loadOpportunities();
     } catch (exception) { setError(errorMessage(exception)); }
     finally { setBusy(false); }
   }
@@ -119,6 +119,16 @@ export default function EmployerDashboard({ user, meta, onLogin }: Props) {
   if (loading && !company) return <section className="page-surface container center-state">در حال دریافت پنل کارفرما…</section>;
 
   if (!company) return <section className="page-surface container employer-shell"><div className="employer-intro"><Building2/><div><h2>ثبت شرکت</h2><p>اطلاعات واقعی شرکت را وارد کنید. نام شرکت روی فرصت‌های منتشرشده نمایش داده می‌شود.</p></div></div>{error&&<p className="form-error">{error}</p>}<CompanyForm company={null} busy={busy} onSubmit={saveCompany}/></section>;
+
+  if (company.status !== "verified") {
+    const reviewText = company.status === "suspended"
+      ? "دسترسی شرکت تعلیق شده است. برای بررسی با پشتیبانی تماس بگیرید."
+      : company.status === "under_review"
+        ? "مدارک شرکت در حال بررسی است. پس از تأیید، انتشار فرصت فعال می‌شود."
+        : "شرکت ثبت شده و در انتظار بررسی مدیر است. تا پیش از تأیید امکان انتشار فرصت وجود ندارد.";
+
+    return <section className="page-surface container employer-shell"><div className="employer-intro"><Building2/><div><h2>{company.name}</h2><p>{reviewText}</p></div></div>{error&&<p className="form-error">{error}</p>}{message&&<p className="form-success">{message}</p>}<CompanyForm company={company} busy={busy} onSubmit={saveCompany}/></section>;
+  }
 
   return <section className="page-surface container employer-shell">
     <div className="employer-head"><div><span>پنل شرکت</span><h2>{company.name}</h2></div><button className="primary-button" onClick={() => { setEditing("new"); setTab("opportunities"); }}><Plus/> فرصت جدید</button></div>

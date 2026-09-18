@@ -16,9 +16,10 @@ class EmployerWorkflowTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_verified_user_can_register_company_and_publish_owned_opportunity(): void
+    public function test_new_company_requires_admin_verification_before_publishing_opportunities(): void
     {
         $employer = User::factory()->create();
+        $admin = User::factory()->create(['is_admin' => true]);
         $category = Category::factory()->create();
 
         $this->actingAs($employer)->postJson('/api/v1/employer/company', [
@@ -26,9 +27,11 @@ class EmployerWorkflowTest extends TestCase
             'contact_email' => 'jobs@berlin-technik.de',
             'city' => 'Berlin',
             'website' => 'https://berlin-technik.de',
-        ])->assertCreated()->assertJsonPath('company.name', 'Berlin Technik GmbH');
+        ])->assertCreated()
+            ->assertJsonPath('company.name', 'Berlin Technik GmbH')
+            ->assertJsonPath('company.status', 'pending');
 
-        $response = $this->actingAs($employer)->postJson('/api/v1/employer/opportunities', [
+        $payload = [
             'category_id' => $category->id,
             'title_fa' => 'کارآموز مکاترونیک',
             'title_de' => 'Ausbildung Mechatroniker/in',
@@ -40,7 +43,20 @@ class EmployerWorkflowTest extends TestCase
             'visa_support' => 'possible',
             'skills' => ['Technik', 'Teamarbeit'],
             'status' => 'published',
+        ];
+
+        $this->actingAs($employer)
+            ->postJson('/api/v1/employer/opportunities', $payload)
+            ->assertForbidden();
+
+        $company = $employer->company()->firstOrFail();
+        $this->actingAs($admin);
+        $company->update([
+            'status' => 'verified',
+            'verification_method' => 'admin_review',
         ]);
+
+        $response = $this->actingAs($employer)->postJson('/api/v1/employer/opportunities', $payload);
 
         $response->assertCreated()
             ->assertJsonPath('opportunity.status', 'published')
@@ -52,6 +68,27 @@ class EmployerWorkflowTest extends TestCase
             'application_url' => null,
             'status' => 'published',
         ]);
+        $this->assertDatabaseHas('companies', [
+            'id' => $company->id,
+            'status' => 'verified',
+            'verification_method' => 'admin_review',
+            'verified_by' => $admin->id,
+        ]);
+    }
+
+    public function test_pending_company_cannot_list_or_manage_opportunities(): void
+    {
+        $employer = User::factory()->create();
+        Company::factory()->for($employer, 'owner')->create([
+            'status' => 'pending',
+            'verification_method' => null,
+            'verified_at' => null,
+            'verified_by' => null,
+        ]);
+
+        $this->actingAs($employer)
+            ->getJson('/api/v1/employer/opportunities')
+            ->assertForbidden();
     }
 
     public function test_internal_application_and_status_changes_are_split_between_candidate_and_employer(): void
