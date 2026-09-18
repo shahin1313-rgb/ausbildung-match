@@ -30,12 +30,12 @@ class WeeklyOpportunityDigest extends Command
             ->limit(50)
             ->get();
 
-        Mail::to($email)->send(new WeeklyOpportunityDigestMail(
+        Mail::to($email)->queue(new WeeklyOpportunityDigestMail(
             $opportunities,
             rtrim((string) config('opportunities.frontend_url'), '/'),
         ));
 
-        $this->info("Weekly digest sent to {$email}.");
+        $this->info("Weekly digest queued for {$email}.");
 
         return self::SUCCESS;
     }

@@ -34,7 +34,7 @@ class OpportunityLinksAndWeeklyDigestTest extends TestCase
 
         $this->artisan('opportunities:weekly-digest')->assertSuccessful();
 
-        Mail::assertSent(WeeklyOpportunityDigestMail::class, function (WeeklyOpportunityDigestMail $mail) use ($opportunity): bool {
+        Mail::assertQueued(WeeklyOpportunityDigestMail::class, function (WeeklyOpportunityDigestMail $mail) use ($opportunity): bool {
             return $mail->hasTo('digest@example.com')
                 && str_contains($mail->render(), "https://ausbildung.example/opportunities/{$opportunity->slug}");
         });
