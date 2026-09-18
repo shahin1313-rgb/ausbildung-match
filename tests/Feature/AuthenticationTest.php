@@ -44,4 +44,31 @@ class AuthenticationTest extends TestCase
         $this->assertAuthenticated();
         $this->assertDatabaseHas('user_profiles', ['german_level' => 'none']);
     }
+
+    public function test_registration_validation_messages_are_clear_and_persian(): void
+    {
+        $this->postJson('/api/v1/auth/register', [
+            'name' => '',
+            'email' => 'not-an-email',
+            'password' => '12345678',
+            'password_confirmation' => 'different',
+            'accept_terms' => false,
+            'accept_privacy' => false,
+        ])->assertUnprocessable()
+            ->assertJsonPath('errors.name.0', 'نام و نام خانوادگی را وارد کنید.')
+            ->assertJsonPath('errors.email.0', 'آدرس ایمیل معتبر نیست؛ نمونه صحیح: name@example.com')
+            ->assertJsonPath('errors.password.0', 'رمز عبور و تکرار آن یکسان نیستند.')
+            ->assertJsonPath('errors.accept_terms.0', 'برای ساخت حساب باید شرایط استفاده را بپذیرید.')
+            ->assertJsonPath('errors.accept_privacy.0', 'برای ساخت حساب باید سیاست حریم خصوصی را تأیید کنید.');
+    }
+
+    public function test_login_validation_messages_are_clear_and_persian(): void
+    {
+        $this->postJson('/api/v1/auth/login', [
+            'email' => 'invalid',
+            'password' => '',
+        ])->assertUnprocessable()
+            ->assertJsonPath('errors.email.0', 'آدرس ایمیل معتبر نیست؛ نمونه صحیح: name@example.com')
+            ->assertJsonPath('errors.password.0', 'رمز عبور را وارد کنید.');
+    }
 }
