@@ -16,6 +16,7 @@ use App\Http\Controllers\Api\V1\OpportunityController;
 use App\Http\Controllers\Api\V1\OpportunityReportController;
 use App\Http\Controllers\Api\V1\ProfileController;
 use App\Http\Controllers\Api\V1\ResumeController;
+use App\Http\Controllers\Api\V1\SavedSearchController;
 use App\Http\Middleware\EnsureApiEmailVerified;
 use Illuminate\Support\Facades\Route;
 
@@ -62,6 +63,10 @@ Route::prefix('v1')->group(function (): void {
             Route::get('/favorites', [FavoriteController::class, 'index']);
             Route::put('/favorites/{opportunity}', [FavoriteController::class, 'store']);
             Route::delete('/favorites/{opportunity}', [FavoriteController::class, 'destroy']);
+
+            Route::get('/saved-searches', [SavedSearchController::class, 'index']);
+            Route::post('/saved-searches', [SavedSearchController::class, 'store'])->middleware('throttle:30,1');
+            Route::delete('/saved-searches/{savedSearch}', [SavedSearchController::class, 'destroy']);
 
             Route::get('/german-cv', [GermanCvController::class, 'show']);
             Route::put('/german-cv', [GermanCvController::class, 'update']);

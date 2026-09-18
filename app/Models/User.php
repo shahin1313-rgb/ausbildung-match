@@ -90,6 +90,11 @@ class User extends Authenticatable implements FilamentUser, HasAppAuthentication
         return $this->belongsToMany(Opportunity::class, 'favorites')->withTimestamps();
     }
 
+    public function savedSearches(): HasMany
+    {
+        return $this->hasMany(SavedSearch::class);
+    }
+
     public function germanCv(): HasOne
     {
         return $this->hasOne(GermanCv::class);

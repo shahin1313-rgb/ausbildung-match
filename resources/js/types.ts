@@ -92,6 +92,22 @@ export type OpportunityCollection = {
   meta: PaginationMeta;
 };
 
+export type SearchFilters = {
+  q: string;
+  category: string;
+  city: string;
+  german_level: string;
+  international: boolean;
+  sort: string;
+};
+
+export type SavedSearch = {
+  id: number;
+  name: string;
+  filters: SearchFilters;
+  updated_at: string;
+};
+
 export type Profile = {
   phone: string | null;
   country: string | null;
