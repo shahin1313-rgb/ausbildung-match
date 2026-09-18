@@ -32,6 +32,7 @@ class User extends Authenticatable implements FilamentUser, HasAppAuthentication
         'email',
         'password',
         'is_admin',
+        'is_super_admin',
         'email_verified_at',
         'terms_accepted_at',
         'privacy_accepted_at',
@@ -54,6 +55,7 @@ class User extends Authenticatable implements FilamentUser, HasAppAuthentication
             'privacy_accepted_at' => 'datetime',
             'password' => 'hashed',
             'is_admin' => 'boolean',
+            'is_super_admin' => 'boolean',
         ];
     }
 
@@ -125,6 +127,16 @@ class User extends Authenticatable implements FilamentUser, HasAppAuthentication
     public function opportunityReports(): HasMany
     {
         return $this->hasMany(OpportunityReport::class);
+    }
+
+    public function adminAuditLogs(): HasMany
+    {
+        return $this->hasMany(AdminAuditLog::class, 'actor_id');
+    }
+
+    public function receivedAdminAuditLogs(): HasMany
+    {
+        return $this->hasMany(AdminAuditLog::class, 'subject_id');
     }
 
     public function company(): HasOne

@@ -7,7 +7,7 @@ use App\Filament\Resources\Users\Pages\ListUsers;
 use App\Models\User;
 use BackedEnum;
 use Filament\Actions\EditAction;
-use Filament\Forms\Components\DateTimePicker;
+use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Resources\Resource;
@@ -37,9 +37,29 @@ class UserResource extends Resource
     {
         return $schema->components([
             TextInput::make('name')->label('نام')->required()->maxLength(255),
-            TextInput::make('email')->label('ایمیل')->email()->required()->unique(ignoreRecord: true),
-            Toggle::make('is_admin')->label('مدیر سیستم'),
-            DateTimePicker::make('email_verified_at')->label('زمان تأیید ایمیل'),
+            TextInput::make('email')
+                ->label('ایمیل')
+                ->email()
+                ->required()
+                ->unique(ignoreRecord: true)
+                ->disabled(fn (): bool => ! auth()->user()?->is_super_admin),
+            Toggle::make('is_admin')
+                ->label('مدیر سیستم')
+                ->disabled(fn (?User $record): bool =>
+                    ! auth()->user()?->is_super_admin || auth()->id() === $record?->getKey()
+                ),
+            TextInput::make('current_password')
+                ->label('رمز عبور فعلی شما')
+                ->password()
+                ->revealable()
+                ->autocomplete('current-password')
+                ->helperText('برای تغییر ایمیل یا نقش مدیریتی، تأیید دوباره هویت الزامی است.')
+                ->required(fn (?User $record, callable $get): bool => $record !== null && (
+                    $get('email') !== $record->email ||
+                    (bool) $get('is_admin') !== (bool) $record->is_admin
+                ))
+                ->dehydrated(),
+            Hidden::make('email_verified_at')->dehydrated(false),
         ]);
     }
 
@@ -64,6 +84,14 @@ class UserResource extends Resource
     public static function canCreate(): bool
     {
         return false;
+    }
+
+    public static function canEdit($record): bool
+    {
+        $actor = auth()->user();
+
+        return $actor instanceof User
+            && ($actor->is_super_admin || ! $record->is_admin);
     }
 
     public static function getPages(): array
