@@ -3,8 +3,8 @@
 namespace Tests\Feature;
 
 use App\Models\User;
-use Illuminate\Auth\Notifications\ResetPassword;
-use Illuminate\Auth\Notifications\VerifyEmail;
+use App\Notifications\QueuedResetPassword;
+use App\Notifications\QueuedVerifyEmail;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -32,7 +32,7 @@ class EmailAndPasswordSecurityTest extends TestCase
         ])->assertCreated()->assertJsonPath('user.email_verified', false);
 
         $user = User::where('email', 'sara@example.com')->firstOrFail();
-        Notification::assertSentTo($user, VerifyEmail::class);
+        Notification::assertSentTo($user, QueuedVerifyEmail::class);
         $this->getJson('/api/v1/auth/email/status')->assertOk()->assertJsonPath('email_verified', false);
         $this->getJson('/api/v1/profile')->assertForbidden();
         $this->postJson('/api/v1/resumes')->assertForbidden();
@@ -54,7 +54,7 @@ class EmailAndPasswordSecurityTest extends TestCase
         Notification::fake();
         $user = $this->user();
         $user->sendEmailVerificationNotification();
-        Notification::assertSentTo($user, VerifyEmail::class, function (VerifyEmail $notification) use ($user): bool {
+        Notification::assertSentTo($user, QueuedVerifyEmail::class, function (QueuedVerifyEmail $notification) use ($user): bool {
             $mail = $notification->toMail($user);
             $url = $mail->actionUrl;
             $this->assertStringStartsWith('https://frontend.example.com/verify-email?', $url);
@@ -70,7 +70,7 @@ class EmailAndPasswordSecurityTest extends TestCase
         });
 
         Password::sendResetLink(['email' => $user->email]);
-        Notification::assertSentTo($user, ResetPassword::class, function (ResetPassword $notification) use ($user): bool {
+        Notification::assertSentTo($user, QueuedResetPassword::class, function (QueuedResetPassword $notification) use ($user): bool {
             $mail = $notification->toMail($user);
             $url = $mail->actionUrl;
             $this->assertStringStartsWith('https://frontend.example.com/reset-password?', $url);
@@ -104,7 +104,7 @@ class EmailAndPasswordSecurityTest extends TestCase
         $user = $this->user();
         $this->actingAs($user);
         $this->postJson('/api/v1/auth/email/resend')->assertOk();
-        Notification::assertSentToTimes($user, VerifyEmail::class, 1);
+        Notification::assertSentToTimes($user, QueuedVerifyEmail::class, 1);
         $this->postJson('/api/v1/auth/email/resend')->assertStatus(429);
     }
 
@@ -115,7 +115,7 @@ class EmailAndPasswordSecurityTest extends TestCase
         $existing = $this->postJson('/api/v1/auth/forgot-password', ['email' => $user->email])->assertOk()->json('message');
         $unknown = $this->postJson('/api/v1/auth/forgot-password', ['email' => 'nobody@example.com'])->assertOk()->json('message');
         $this->assertSame($existing, $unknown);
-        Notification::assertSentTo($user, ResetPassword::class);
+        Notification::assertSentTo($user, QueuedResetPassword::class);
     }
 
     public function test_password_recovery_rate_limit_covers_reset_attempts(): void
@@ -199,7 +199,7 @@ class EmailAndPasswordSecurityTest extends TestCase
         $this->assertGuest('web');
         $this->app['auth']->guard('sanctum')->forgetUser();
         $this->getJson('/api/v1/auth/me')->assertUnauthorized();
-        Notification::assertSentTo($user, VerifyEmail::class);
+        Notification::assertSentTo($user, QueuedVerifyEmail::class);
     }
 
     private function insertSession(User $user): void

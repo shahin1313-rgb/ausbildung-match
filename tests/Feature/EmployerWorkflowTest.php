@@ -55,6 +55,7 @@ class EmployerWorkflowTest extends TestCase
             'status' => 'verified',
             'verification_method' => 'admin_review',
         ]);
+        $employer->unsetRelation('company');
 
         $response = $this->actingAs($employer)->postJson('/api/v1/employer/opportunities', $payload);
 
