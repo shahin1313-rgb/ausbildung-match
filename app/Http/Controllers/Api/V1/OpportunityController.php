@@ -103,6 +103,8 @@ class OpportunityController extends Controller
     {
         abort_unless(
             $opportunity->status === 'published'
+            && $opportunity->company_review_suspended_at === null
+            && (! $opportunity->company_id || $opportunity->company?->isVerified())
             && (! $opportunity->application_deadline || $opportunity->application_deadline->isToday() || $opportunity->application_deadline->isFuture()),
             404
         );

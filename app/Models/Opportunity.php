@@ -42,6 +42,7 @@ class Opportunity extends Model
         'application_url',
         'contact_email',
         'status',
+        'company_review_suspended_at',
         'published_at',
         'source_updated_at',
     ];
@@ -53,6 +54,7 @@ class Opportunity extends Model
             'accepts_international' => 'boolean',
             'start_date' => 'date',
             'application_deadline' => 'date',
+            'company_review_suspended_at' => 'datetime',
             'published_at' => 'datetime',
             'source_updated_at' => 'datetime',
         ];
@@ -89,6 +91,11 @@ class Opportunity extends Model
     {
         return $query
             ->where('status', 'published')
+            ->whereNull('company_review_suspended_at')
+            ->where(function (Builder $query): void {
+                $query->whereNull('company_id')
+                    ->orWhereHas('company', fn (Builder $company): Builder => $company->where('status', 'verified'));
+            })
             ->where(function (Builder $query): void {
                 $query
                     ->whereNull('application_deadline')
