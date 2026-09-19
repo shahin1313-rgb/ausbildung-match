@@ -10,6 +10,14 @@ return [
             'throw' => false,
             'report' => false,
         ],
+        'resumes' => [
+            'driver' => 'local',
+            'root' => storage_path('app/private/resumes'),
+            'serve' => false,
+            'visibility' => 'private',
+            'throw' => false,
+            'report' => true,
+        ],
         'public' => [
             'driver' => 'local',
             'root' => storage_path('app/public'),

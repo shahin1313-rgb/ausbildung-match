@@ -43,6 +43,10 @@ class ApplicationController extends Controller
                 'candidate_message' => ['nullable', 'string', 'max:3000'],
                 'consent_data_sharing' => ['required', 'accepted'],
             ]);
+            $resume = $request->user()->resumes()
+                ->where('is_primary', true)
+                ->where('retention_until', '>', now())
+                ->first();
             $application = $request->user()->applications()->updateOrCreate(
                 ['opportunity_id' => $opportunity->id],
                 [
@@ -50,6 +54,7 @@ class ApplicationController extends Controller
                     'applied_at' => now(),
                     'candidate_message' => $validated['candidate_message'] ?? null,
                     'data_sharing_consent_at' => now(),
+                    'resume_id' => $resume?->id,
                 ]
             );
 

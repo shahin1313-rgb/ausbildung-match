@@ -24,20 +24,23 @@ class ResumeController extends Controller
     public function store(ResumeUploadRequest $request): JsonResponse
     {
         $file = $request->file('resume');
-        $extension = strtolower($file->extension() ?: 'bin');
+        $extension = strtolower($file->getClientOriginalExtension());
+        $originalName = basename(str_replace('\\', '/', $file->getClientOriginalName()));
+        $originalName = preg_replace('/[\x00-\x1F\x7F]/u', '', $originalName) ?: 'resume.'.$extension;
         $path = $file->storeAs(
-            'resumes/'.$request->user()->id,
+            (string) $request->user()->id,
             Str::uuid().'.'.$extension,
-            'local'
+            'resumes'
         );
+        abort_if($path === false, 500, 'ذخیره امن رزومه انجام نشد.');
 
         try {
-            $resume = DB::transaction(function () use ($request, $file, $path): Resume {
+            $resume = DB::transaction(function () use ($request, $file, $path, $originalName): Resume {
                 $request->user()->resumes()->update(['is_primary' => false]);
 
                 return $request->user()->resumes()->create([
-                    'original_name' => Str::limit($file->getClientOriginalName(), 255, ''),
-                    'disk' => 'local',
+                    'original_name' => Str::limit($originalName, 255, ''),
+                    'disk' => 'resumes',
                     'path' => $path,
                     'mime_type' => $file->getMimeType(),
                     'size_bytes' => $file->getSize(),
@@ -48,7 +51,7 @@ class ResumeController extends Controller
                 ]);
             });
         } catch (Throwable $exception) {
-            Storage::disk('local')->delete($path);
+            Storage::disk('resumes')->delete($path);
             throw $exception;
         }
 
@@ -62,7 +65,8 @@ class ResumeController extends Controller
     {
         abort_unless($resume->user_id === $request->user()->id, 404);
 
-        Storage::disk($resume->disk)->delete($resume->path);
+        $disk = Storage::disk($resume->disk);
+        abort_if($disk->exists($resume->path) && ! $disk->delete($resume->path), 500, 'حذف امن فایل انجام نشد.');
         $resume->delete();
 
         return response()->json(['message' => 'رزومه حذف شد.']);

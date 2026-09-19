@@ -46,15 +46,15 @@ class LegalConsentTest extends TestCase
 
     public function test_resume_upload_requires_consent_and_gets_a_retention_deadline(): void
     {
-        Storage::fake('local');
+        Storage::fake('resumes');
         $user = User::factory()->create();
 
         $this->actingAs($user)->postJson('/api/v1/resumes', [
-            'resume' => UploadedFile::fake()->create('lebenslauf.pdf', 100, 'application/pdf'),
+            'resume' => UploadedFile::fake()->createWithContent('lebenslauf.pdf', "%PDF-1.4\nsecure resume"),
         ])->assertUnprocessable()->assertJsonValidationErrors('consent_resume_processing');
 
         $this->actingAs($user)->postJson('/api/v1/resumes', [
-            'resume' => UploadedFile::fake()->create('lebenslauf.pdf', 100, 'application/pdf'),
+            'resume' => UploadedFile::fake()->createWithContent('lebenslauf.pdf', "%PDF-1.4\nsecure resume"),
             'consent_resume_processing' => true,
         ])->assertCreated();
 

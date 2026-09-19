@@ -178,7 +178,7 @@ class EmployerWorkflowTest extends TestCase
             'data_sharing_consent_at' => now(),
         ]);
         Storage::disk('local')->put('resumes/candidate.pdf', 'private resume');
-        Resume::query()->create([
+        $resume = Resume::query()->create([
             'user_id' => $candidate->id,
             'original_name' => 'lebenslauf.pdf',
             'disk' => 'local',
@@ -188,6 +188,7 @@ class EmployerWorkflowTest extends TestCase
             'status' => 'uploaded',
             'is_primary' => true,
         ]);
+        $application->update(['resume_id' => $resume->id]);
 
         $this->actingAs($employer)
             ->get("/api/v1/employer/applications/{$application->id}/resume")

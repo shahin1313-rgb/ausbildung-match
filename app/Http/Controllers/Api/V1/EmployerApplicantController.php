@@ -20,7 +20,7 @@ class EmployerApplicantController extends Controller
         $applications = $opportunity->applications()
             ->where('status', '!=', 'opened')
             ->whereNotNull('data_sharing_consent_at')
-            ->with(['user.profile', 'user.resumes'])
+            ->with(['user.profile', 'resume'])
             ->latest('applied_at')
             ->get();
 
@@ -42,17 +42,28 @@ class EmployerApplicantController extends Controller
 
         return response()->json([
             'message' => 'وضعیت متقاضی به‌روزرسانی شد.',
-            'application' => new EmployerApplicantResource($application->fresh()->load(['user.profile', 'user.resumes'])),
+            'application' => new EmployerApplicantResource($application->fresh()->load(['user.profile', 'resume'])),
         ]);
     }
 
     public function downloadResume(Request $request, Application $application): StreamedResponse
     {
         $this->authorizeApplication($request, $application);
-        $resume = $application->user->resumes()->where('is_primary', true)->first();
-        abort_unless($resume && Storage::disk($resume->disk)->exists($resume->path), 404);
+        $application->loadMissing('resume');
+        $resume = $application->resume;
+        abort_unless(
+            $resume
+                && $resume->user_id === $application->user_id
+                && (! $resume->retention_until || $resume->retention_until->isFuture())
+                && Storage::disk($resume->disk)->exists($resume->path),
+            404
+        );
 
-        return Storage::disk($resume->disk)->download($resume->path, $resume->original_name);
+        return Storage::disk($resume->disk)->download($resume->path, $resume->original_name, [
+            'Cache-Control' => 'private, no-store, max-age=0',
+            'Pragma' => 'no-cache',
+            'X-Content-Type-Options' => 'nosniff',
+        ]);
     }
 
     private function authorizeOpportunity(Request $request, Opportunity $opportunity): void

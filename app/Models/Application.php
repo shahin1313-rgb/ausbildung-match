@@ -15,6 +15,7 @@ class Application extends Model
     protected $fillable = [
         'user_id',
         'opportunity_id',
+        'resume_id',
         'status',
         'applied_at',
         'interview_at',
@@ -40,5 +41,10 @@ class Application extends Model
     public function opportunity(): BelongsTo
     {
         return $this->belongsTo(Opportunity::class);
+    }
+
+    public function resume(): BelongsTo
+    {
+        return $this->belongsTo(Resume::class);
     }
 }
