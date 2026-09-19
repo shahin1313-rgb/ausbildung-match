@@ -1,9 +1,10 @@
 <?php
 
+use App\Http\Middleware\SetSecurityHeaders;
+use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
-use Illuminate\Auth\AuthenticationException;
 use Illuminate\Http\Request;
 
 return Application::configure(basePath: dirname(__DIR__))
@@ -14,6 +15,7 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->append(SetSecurityHeaders::class);
         $middleware->statefulApi();
         // Avoid resolving Laravel's default route('login') before API exceptions are rendered.
         $middleware->redirectGuestsTo(function (Request $request): ?string {
