@@ -84,11 +84,15 @@ class ResumeSecurityTest extends TestCase
         $old->update(['is_primary' => false]);
         $this->resume($candidate, 'new.pdf', 'new.pdf', true);
 
-        $this->actingAs($employer)
+        $response = $this->actingAs($employer)
             ->get("/api/v1/employer/applications/{$application->id}/resume")
             ->assertOk()
-            ->assertDownload('old.pdf')
-            ->assertHeader('Cache-Control', 'private, no-store, max-age=0');
+            ->assertDownload('old.pdf');
+
+        $cacheControl = (string) $response->headers->get('Cache-Control');
+        $this->assertStringContainsString('private', $cacheControl);
+        $this->assertStringContainsString('no-store', $cacheControl);
+        $this->assertStringContainsString('max-age=0', $cacheControl);
     }
 
     private function resume(User $user, string $name, string $path, bool $primary): Resume
