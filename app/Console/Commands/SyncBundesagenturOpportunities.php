@@ -89,7 +89,10 @@ class SyncBundesagenturOpportunities extends Command
                         'external_id' => $reference,
                     ]);
                     $wasNew = ! $opportunity->exists;
-                    $opportunity->restore();
+
+                    if ($opportunity->exists && $opportunity->trashed()) {
+                        $opportunity->restore();
+                    }
                     $opportunity->fill([
                         ...$data,
                         'category_id' => $category->id,
