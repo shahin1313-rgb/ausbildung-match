@@ -1,7 +1,14 @@
 import json
 import unittest
 
-from ba_reader import CollectorError, enrich_from_detail, extract_opportunities
+from ba_reader import (
+    CollectorError,
+    _company_website,
+    _find_contact_form,
+    _parse_contact_html,
+    enrich_from_detail,
+    extract_opportunities,
+)
 
 
 class BaReaderTest(unittest.TestCase):
@@ -136,6 +143,27 @@ class BaReaderTest(unittest.TestCase):
         enriched = enrich_from_detail(opportunity, detail_document)
 
         self.assertIsNone(enriched.contact_phone)
+
+    def test_discovers_contact_data_and_form_on_official_page(self) -> None:
+        document = """
+            <html><body>
+                <a href="mailto:karriere@example.de">E-Mail</a>
+                <a href="tel:+4930123456">Telefon</a>
+                <a href="/karriere/bewerben">Jetzt bewerben</a>
+            </body></html>
+        """
+        parsed = _parse_contact_html(document, "https://example.de/karriere")
+
+        self.assertEqual("karriere@example.de", parsed.emails[0])
+        self.assertEqual("+4930123456", parsed.phones[0])
+        self.assertEqual(
+            "https://example.de/karriere/bewerben",
+            _find_contact_form(parsed.links, "https://example.de/karriere"),
+        )
+
+    def test_rejects_job_platform_as_company_website(self) -> None:
+        self.assertIsNone(_company_website("www.gute-jobs.de"))
+        self.assertEqual("https://www.example.de/", _company_website("www.example.de/karriere"))
 
 
 if __name__ == "__main__":

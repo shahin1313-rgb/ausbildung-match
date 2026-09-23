@@ -9,22 +9,31 @@ from __future__ import annotations
 
 import argparse
 import html
+import ipaddress
 import json
 import re
+import socket
 import sys
 import time
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urljoin, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 
 BASE_URL = "https://www.arbeitsagentur.de/jobsuche/suche"
 USER_AGENT = "AusbildungMatchCollector/0.1 (local development test)"
 MAX_RESPONSE_BYTES = 8_000_000
+MAX_COMPANY_RESPONSE_BYTES = 2_000_000
+CONTACT_PAGE_WORDS = ("karriere", "career", "ausbildung", "jobs", "kontakt", "contact", "impressum")
+JOB_PLATFORM_DOMAINS = {
+    "arbeitsagentur.de", "gute-jobs.de", "jobs4us.de", "hogapage.de", "azubi.de",
+    "studyflix.de", "indeed.com", "stepstone.de", "linkedin.com",
+}
 
 
 class CollectorError(RuntimeError):
@@ -50,6 +59,11 @@ class Opportunity:
     contact_email: str | None
     contact_phone: str | None
     contact_address: str | None
+    contact_form_url: str | None
+    company_website: str | None
+    contact_type: str | None
+    contact_source_url: str | None
+    contact_confidence: str | None
     application_url: str | None
     detail_url: str
     source_url: str
@@ -155,6 +169,11 @@ def normalize_row(row: dict[str, Any], source_url: str) -> Opportunity | None:
         contact_email=None,
         contact_phone=None,
         contact_address=None,
+        contact_form_url=None,
+        company_website=None,
+        contact_type=None,
+        contact_source_url=None,
+        contact_confidence=None,
         application_url=_optional_https_url(row.get("externeURL")),
         detail_url=detail_url,
         source_url=source_url,
@@ -230,6 +249,10 @@ def enrich_from_detail(opportunity: Opportunity, document: str) -> Opportunity:
         or _optional_https_url(_first_value(detail, "bewerbung.url", "bewerbungsUrl"))
         or opportunity.application_url
     )
+    company_website = _company_website(detail.get("allianzpartnerUrl"))
+    contact_type = "recruiting" if contact_email or contact_phone else None
+    contact_source_url = opportunity.detail_url if contact_type else None
+    contact_confidence = "high" if contact_type else None
 
     return replace(
         opportunity,
@@ -239,10 +262,114 @@ def enrich_from_detail(opportunity: Opportunity, document: str) -> Opportunity:
         contact_email=_optional_email(contact_email),
         contact_phone=_optional_string(contact_phone),
         contact_address=contact_address,
+        company_website=company_website,
+        contact_type=contact_type,
+        contact_source_url=contact_source_url,
+        contact_confidence=contact_confidence,
         application_url=application_url,
         start_date=_optional_string((detail.get("eintrittszeitraum") or {}).get("von"))
         or opportunity.start_date,
     )
+
+
+class _ContactHtmlParser(HTMLParser):
+    def __init__(self, page_url: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self.page_url = page_url
+        self.links: list[str] = []
+        self.emails: list[str] = []
+        self.phones: list[str] = []
+        self.text_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        href = attributes.get("href")
+        if not href:
+            return
+        if href.lower().startswith("mailto:"):
+            email = href[7:].split("?", 1)[0].strip()
+            if _optional_email(email):
+                self.emails.append(email)
+        elif href.lower().startswith("tel:"):
+            phone = _normalize_phone(href[4:])
+            if phone:
+                self.phones.append(phone)
+        elif tag == "a":
+            self.links.append(urljoin(self.page_url, href))
+
+    def handle_data(self, data: str) -> None:
+        if data.strip():
+            self.text_parts.append(data.strip())
+
+    @property
+    def visible_text(self) -> str:
+        return " ".join(self.text_parts)
+
+
+def enrich_from_company_website(opportunity: Opportunity, delay: float = 0.7) -> Opportunity:
+    base_url = opportunity.company_website
+    if not base_url:
+        return _ensure_contact_method(opportunity)
+
+    candidates = [base_url]
+    try:
+        homepage = _fetch_company_page(base_url)
+        home_parser = _parse_contact_html(homepage, base_url)
+        candidates.extend(_prioritized_contact_links(home_parser.links, base_url))
+    except CollectorError:
+        return _ensure_contact_method(opportunity)
+
+    # Also try conventional paths when the homepage does not expose navigation links.
+    candidates.extend(urljoin(base_url.rstrip("/") + "/", path) for path in (
+        "karriere", "ausbildung", "kontakt", "impressum"
+    ))
+
+    seen: set[str] = set()
+    for page_url in candidates:
+        normalized = page_url.split("#", 1)[0]
+        if normalized in seen or len(seen) >= 6 or not _same_site(base_url, normalized):
+            continue
+        seen.add(normalized)
+        try:
+            document = homepage if normalized == base_url else _fetch_company_page(normalized)
+            parsed = _parse_contact_html(document, normalized)
+        except CollectorError:
+            continue
+
+        email = next((_optional_email(item) for item in parsed.emails if _optional_email(item)), None)
+        email = email or _extract_email(parsed.visible_text)
+        phone = next((item for item in parsed.phones if item), None) or _extract_phone(parsed.visible_text)
+        form_url = _find_contact_form(parsed.links, normalized)
+        page_type, confidence = _contact_page_type(normalized)
+
+        if email or phone or form_url:
+            return replace(
+                opportunity,
+                contact_email=opportunity.contact_email or email,
+                contact_phone=opportunity.contact_phone or phone,
+                contact_form_url=form_url,
+                contact_type=opportunity.contact_type or page_type,
+                contact_source_url=opportunity.contact_source_url or normalized,
+                contact_confidence=opportunity.contact_confidence or confidence,
+            )
+        if delay > 0:
+            time.sleep(delay)
+
+    return _ensure_contact_method(opportunity)
+
+
+def _ensure_contact_method(opportunity: Opportunity) -> Opportunity:
+    if opportunity.contact_email or opportunity.contact_phone or opportunity.contact_form_url:
+        return opportunity
+    if opportunity.application_url:
+        return replace(
+            opportunity,
+            contact_form_url=opportunity.application_url,
+            contact_type="application",
+            contact_source_url=opportunity.application_url,
+            contact_confidence="high",
+        )
+    return opportunity
 
 
 def collect(
@@ -252,6 +379,8 @@ def collect(
     delay: float,
     include_details: bool = True,
     detail_delay: float = 1.0,
+    include_company_contacts: bool = False,
+    company_delay: float = 0.7,
 ) -> list[Opportunity]:
     collected: dict[str, Opportunity] = {}
 
@@ -290,7 +419,21 @@ def collect(
         if index < len(opportunities) and detail_delay > 0:
             time.sleep(detail_delay)
 
-    return enriched
+    if not include_company_contacts:
+        return [_ensure_contact_method(item) for item in enriched]
+
+    company_enriched: list[Opportunity] = []
+    for index, opportunity in enumerate(enriched, start=1):
+        if opportunity.contact_email or opportunity.contact_phone:
+            company_enriched.append(_ensure_contact_method(opportunity))
+            continue
+        result = enrich_from_company_website(opportunity, company_delay)
+        company_enriched.append(result)
+        print(
+            f"Company contact {index}/{len(enriched)}: {opportunity.employer_name or opportunity.external_id}",
+            file=sys.stderr,
+        )
+    return company_enriched
 
 
 def write_json(path: Path, opportunities: list[Opportunity], query: str, city: str) -> None:
@@ -315,6 +458,97 @@ def _optional_string(value: Any) -> str | None:
 def _optional_https_url(value: Any) -> str | None:
     text = _optional_string(value)
     return text if text and text.startswith("https://") else None
+
+
+def _company_website(value: Any) -> str | None:
+    text = _optional_string(value)
+    if not text:
+        return None
+    url = text if text.startswith(("https://", "http://")) else f"https://{text.lstrip('/')}"
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    if parsed.scheme not in {"http", "https"} or not host:
+        return None
+    if any(host == domain or host.endswith("." + domain) for domain in JOB_PLATFORM_DOMAINS):
+        return None
+    return f"https://{parsed.netloc}/"
+
+
+def _fetch_company_page(url: str, timeout: float = 15.0) -> str:
+    _assert_public_http_url(url)
+    request = Request(url, headers={
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "de-DE,de;q=0.9",
+        "User-Agent": USER_AGENT,
+    })
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            final_url = response.geturl()
+            _assert_public_http_url(final_url)
+            content_type = response.headers.get_content_type()
+            if content_type not in {"text/html", "application/xhtml+xml"}:
+                raise CollectorError(f"Unsupported company page type: {content_type}")
+            body = response.read(MAX_COMPANY_RESPONSE_BYTES + 1)
+    except (HTTPError, URLError, TimeoutError, ValueError) as error:
+        raise CollectorError(f"Could not read company page: {url}") from error
+    if len(body) > MAX_COMPANY_RESPONSE_BYTES:
+        raise CollectorError("Company page exceeded the 2 MB safety limit.")
+    return body.decode("utf-8", errors="replace")
+
+
+def _assert_public_http_url(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+        raise CollectorError("Company URL is not a safe public HTTP(S) URL.")
+    try:
+        default_port = 443 if parsed.scheme == "https" else 80
+        addresses = {item[4][0] for item in socket.getaddrinfo(parsed.hostname, parsed.port or default_port)}
+    except socket.gaierror as error:
+        raise CollectorError("Company host could not be resolved.") from error
+    for address in addresses:
+        ip = ipaddress.ip_address(address)
+        if not ip.is_global:
+            raise CollectorError("Company URL resolves to a private or reserved network.")
+
+
+def _parse_contact_html(document: str, page_url: str) -> _ContactHtmlParser:
+    parser = _ContactHtmlParser(page_url)
+    parser.feed(document)
+    return parser
+
+
+def _same_site(base_url: str, candidate_url: str) -> bool:
+    base = (urlparse(base_url).hostname or "").lower().removeprefix("www.")
+    candidate = (urlparse(candidate_url).hostname or "").lower().removeprefix("www.")
+    return bool(base and candidate and (candidate == base or candidate.endswith("." + base)))
+
+
+def _prioritized_contact_links(links: list[str], base_url: str) -> list[str]:
+    unique: list[str] = []
+    for link in links:
+        lower = link.lower()
+        if _same_site(base_url, link) and any(word in lower for word in CONTACT_PAGE_WORDS):
+            clean = link.split("#", 1)[0]
+            if clean not in unique:
+                unique.append(clean)
+    return sorted(unique, key=lambda url: _contact_page_type(url)[1] != "high")[:5]
+
+
+def _find_contact_form(links: list[str], page_url: str) -> str | None:
+    for link in links:
+        lower = link.lower()
+        if _same_site(page_url, link) and any(word in lower for word in ("bewerben", "application", "kontakt", "contact")):
+            return link.split("#", 1)[0]
+    return None
+
+
+def _contact_page_type(url: str) -> tuple[str, str]:
+    lower = url.lower()
+    if any(word in lower for word in ("karriere", "career", "ausbildung", "jobs", "bewerben")):
+        return "recruiting", "high"
+    if any(word in lower for word in ("kontakt", "contact")):
+        return "company_general", "medium"
+    return "impressum", "low"
 
 
 def _optional_email(value: Any) -> str | None:
@@ -435,6 +669,17 @@ def parse_args() -> argparse.Namespace:
         help="Only read the result list; do not fetch descriptions or contacts",
     )
     parser.add_argument(
+        "--company-contacts",
+        action="store_true",
+        help="Search official company career/contact/imprint pages for public contact methods",
+    )
+    parser.add_argument(
+        "--company-delay",
+        type=float,
+        default=0.7,
+        help="Seconds between company website requests",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=Path("storage/app/private/imports/ba-opportunities.json"),
@@ -452,6 +697,8 @@ def main() -> int:
             max(args.delay, 0),
             include_details=not args.skip_details,
             detail_delay=max(args.detail_delay, 0),
+            include_company_contacts=args.company_contacts and not args.skip_details,
+            company_delay=max(args.company_delay, 0),
         )
         write_json(args.output, opportunities, args.query, args.city)
     except CollectorError as error:

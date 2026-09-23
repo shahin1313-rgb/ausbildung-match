@@ -16,6 +16,14 @@ python .\collector\ba_reader.py --query "Ausbildung" --city "Berlin" --pages 1
 python .\collector\ba_reader.py --city "Berlin" --pages 1 --skip-details
 ```
 
+برای تکمیل روش تماس از وب‌سایت رسمی شرکت نیز گزینه زیر را اضافه کنید:
+
+```powershell
+python .\collector\ba_reader.py --city "Berlin" --pages 1 --company-contacts
+```
+
+این حالت صفحات عمومی Karriere/Ausbildung، Kontakt و Impressum را بررسی می‌کند. LinkedIn جمع‌آوری خودکار نمی‌شود. هر نتیجه با `contact_type`، `contact_source_url` و `contact_confidence` مشخص می‌شود. اگر اطلاعات استخدامی وجود نداشته باشد، فرم رسمی درخواست یا تماس ذخیره می‌شود.
+
 خروجی پیش‌فرض:
 
 ```text
