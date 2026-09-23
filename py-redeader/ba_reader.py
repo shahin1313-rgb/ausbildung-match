@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlencode, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 
 BASE_URL = "https://www.arbeitsagentur.de/jobsuche/suche"
@@ -64,7 +64,12 @@ class Opportunity:
     contact_type: str | None
     contact_source_url: str | None
     contact_confidence: str | None
+    contact_score: int | None
+    contact_emails: tuple[dict[str, Any], ...]
+    contact_phones: tuple[dict[str, Any], ...]
     application_url: str | None
+    final_application_url: str | None
+    application_redirect_count: int
     detail_url: str
     source_url: str
     source: str = "Bundesagentur für Arbeit"
@@ -174,7 +179,12 @@ def normalize_row(row: dict[str, Any], source_url: str) -> Opportunity | None:
         contact_type=None,
         contact_source_url=None,
         contact_confidence=None,
+        contact_score=None,
+        contact_emails=(),
+        contact_phones=(),
         application_url=_optional_https_url(row.get("externeURL")),
+        final_application_url=None,
+        application_redirect_count=0,
         detail_url=detail_url,
         source_url=source_url,
     )
@@ -254,7 +264,14 @@ def enrich_from_detail(opportunity: Opportunity, document: str) -> Opportunity:
     contact_source_url = opportunity.detail_url if contact_type else None
     contact_confidence = "high" if contact_type else None
 
-    return replace(
+    email_evidence = _contact_evidence(
+        _optional_email(contact_email), opportunity.detail_url, "job_detail", 100
+    )
+    phone_evidence = _contact_evidence(
+        _optional_string(contact_phone), opportunity.detail_url, "job_detail", 100
+    )
+
+    result = replace(
         opportunity,
         description_de=description,
         education_requirement=_optional_string(detail.get("geforderterBildungsabschluss")),
@@ -266,10 +283,14 @@ def enrich_from_detail(opportunity: Opportunity, document: str) -> Opportunity:
         contact_type=contact_type,
         contact_source_url=contact_source_url,
         contact_confidence=contact_confidence,
+        contact_score=100 if contact_type else None,
+        contact_emails=(email_evidence,) if email_evidence else (),
+        contact_phones=(phone_evidence,) if phone_evidence else (),
         application_url=application_url,
         start_date=_optional_string((detail.get("eintrittszeitraum") or {}).get("von"))
         or opportunity.start_date,
     )
+    return _merge_jsonld_contacts(result, document, opportunity.detail_url)
 
 
 class _ContactHtmlParser(HTMLParser):
@@ -336,14 +357,27 @@ def enrich_from_company_website(opportunity: Opportunity, delay: float = 0.7) ->
         except CollectorError:
             continue
 
-        email = next((_optional_email(item) for item in parsed.emails if _optional_email(item)), None)
-        email = email or _extract_email(parsed.visible_text)
-        phone = next((item for item in parsed.phones if item), None) or _extract_phone(parsed.visible_text)
+        text_email = _extract_email(parsed.visible_text)
+        text_phone = _extract_phone(parsed.visible_text)
+        emails = _unique_values([*parsed.emails, text_email])
+        phones = _unique_values([*parsed.phones, text_phone])
+        email = emails[0] if emails else None
+        phone = phones[0] if phones else None
         form_url = _find_contact_form(parsed.links, normalized)
-        page_type, confidence = _contact_page_type(normalized)
+        page_type, confidence, score = _contact_page_type(normalized)
 
         if email or phone or form_url:
-            return replace(
+            existing_emails = list(opportunity.contact_emails)
+            existing_phones = list(opportunity.contact_phones)
+            existing_emails.extend(
+                item for value in emails
+                if (item := _contact_evidence(value, normalized, page_type, score))
+            )
+            existing_phones.extend(
+                item for value in phones
+                if (item := _contact_evidence(value, normalized, page_type, score))
+            )
+            result = replace(
                 opportunity,
                 contact_email=opportunity.contact_email or email,
                 contact_phone=opportunity.contact_phone or phone,
@@ -351,7 +385,11 @@ def enrich_from_company_website(opportunity: Opportunity, delay: float = 0.7) ->
                 contact_type=opportunity.contact_type or page_type,
                 contact_source_url=opportunity.contact_source_url or normalized,
                 contact_confidence=opportunity.contact_confidence or confidence,
+                contact_score=opportunity.contact_score or score,
+                contact_emails=_dedupe_evidence(existing_emails),
+                contact_phones=_dedupe_evidence(existing_phones),
             )
+            return _merge_jsonld_contacts(result, document, normalized)
         if delay > 0:
             time.sleep(delay)
 
@@ -368,6 +406,7 @@ def _ensure_contact_method(opportunity: Opportunity) -> Opportunity:
             contact_type="application",
             contact_source_url=opportunity.application_url,
             contact_confidence="high",
+            contact_score=80,
         )
     return opportunity
 
@@ -423,12 +462,20 @@ def collect(
         return [_ensure_contact_method(item) for item in enriched]
 
     company_enriched: list[Opportunity] = []
+    company_cache: dict[str, Opportunity] = {}
     for index, opportunity in enumerate(enriched, start=1):
+        opportunity = _resolve_application_destination(opportunity)
         if opportunity.contact_email or opportunity.contact_phone:
             company_enriched.append(_ensure_contact_method(opportunity))
             continue
+        cache_key = opportunity.company_website or ""
+        if cache_key and cache_key in company_cache:
+            company_enriched.append(_copy_company_contact(opportunity, company_cache[cache_key]))
+            continue
         result = enrich_from_company_website(opportunity, company_delay)
         company_enriched.append(result)
+        if cache_key:
+            company_cache[cache_key] = result
         print(
             f"Company contact {index}/{len(enriched)}: {opportunity.employer_name or opportunity.external_id}",
             file=sys.stderr,
@@ -542,18 +589,151 @@ def _find_contact_form(links: list[str], page_url: str) -> str | None:
     return None
 
 
-def _contact_page_type(url: str) -> tuple[str, str]:
+def _contact_page_type(url: str) -> tuple[str, str, int]:
     lower = url.lower()
     if any(word in lower for word in ("karriere", "career", "ausbildung", "jobs", "bewerben")):
-        return "recruiting", "high"
+        return "recruiting", "high", 90
     if any(word in lower for word in ("kontakt", "contact")):
-        return "company_general", "medium"
-    return "impressum", "low"
+        return "company_general", "medium", 60
+    return "impressum", "low", 30
+
+
+class _TrackingRedirectHandler(HTTPRedirectHandler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.count = 0
+
+    def redirect_request(self, req: Request, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Request | None:
+        self.count += 1
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _resolve_application_destination(opportunity: Opportunity) -> Opportunity:
+    if not opportunity.application_url:
+        return opportunity
+    try:
+        _assert_public_http_url(opportunity.application_url)
+        tracker = _TrackingRedirectHandler()
+        opener = build_opener(tracker)
+        request = Request(opportunity.application_url, method="HEAD", headers={"User-Agent": USER_AGENT})
+        with opener.open(request, timeout=15) as response:
+            final_url = response.geturl()
+        _assert_public_http_url(final_url)
+        return replace(
+            opportunity,
+            final_application_url=final_url,
+            application_redirect_count=tracker.count,
+        )
+    except (CollectorError, HTTPError, URLError, TimeoutError, ValueError):
+        return replace(opportunity, final_application_url=opportunity.application_url)
+
+
+def _copy_company_contact(opportunity: Opportunity, cached: Opportunity) -> Opportunity:
+    return replace(
+        opportunity,
+        contact_email=cached.contact_email,
+        contact_phone=cached.contact_phone,
+        contact_form_url=cached.contact_form_url,
+        contact_type=cached.contact_type,
+        contact_source_url=cached.contact_source_url,
+        contact_confidence=cached.contact_confidence,
+        contact_score=cached.contact_score,
+        contact_emails=cached.contact_emails,
+        contact_phones=cached.contact_phones,
+    )
 
 
 def _optional_email(value: Any) -> str | None:
     text = _optional_string(value)
     return text if text and "@" in text and " " not in text else None
+
+
+def _unique_values(values: list[str | None]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        normalized = _optional_string(value)
+        if normalized and normalized not in result:
+            result.append(normalized)
+    return result
+
+
+def _contact_evidence(
+    value: str | None, source_url: str, source_field: str, score: int
+) -> dict[str, Any] | None:
+    if not value:
+        return None
+    return {
+        "value": value,
+        "source_url": source_url,
+        "source_field": source_field,
+        "confidence_score": score,
+        "extracted_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _dedupe_evidence(items: list[dict[str, Any]]) -> tuple[dict[str, Any], ...]:
+    best: dict[str, dict[str, Any]] = {}
+    for item in items:
+        value = str(item.get("value") or "").casefold()
+        if not value:
+            continue
+        if value not in best or int(item.get("confidence_score") or 0) > int(best[value].get("confidence_score") or 0):
+            best[value] = item
+    return tuple(sorted(best.values(), key=lambda item: int(item.get("confidence_score") or 0), reverse=True))
+
+
+def _merge_jsonld_contacts(opportunity: Opportunity, document: str, page_url: str) -> Opportunity:
+    emails: list[dict[str, Any]] = list(opportunity.contact_emails)
+    phones: list[dict[str, Any]] = list(opportunity.contact_phones)
+    application_url = opportunity.application_url
+
+    for match in re.finditer(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        document,
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        try:
+            payload = json.loads(html.unescape(match.group(1)))
+        except json.JSONDecodeError:
+            continue
+        for key, value in _walk_json(payload):
+            key_lower = key.casefold()
+            text = _optional_string(value) if not isinstance(value, (dict, list)) else None
+            if not text:
+                continue
+            if key_lower in {"email", "emailaddress"}:
+                evidence = _contact_evidence(_optional_email(text), page_url, "json_ld", 95)
+                if evidence:
+                    emails.append(evidence)
+            elif key_lower in {"telephone", "phone", "phonenumber"}:
+                evidence = _contact_evidence(_normalize_phone(text), page_url, "json_ld", 95)
+                if evidence:
+                    phones.append(evidence)
+            elif key_lower in {"url", "applicationurl"} and "apply" in text.lower():
+                application_url = _optional_https_url(urljoin(page_url, text)) or application_url
+
+    merged_emails = _dedupe_evidence(emails)
+    merged_phones = _dedupe_evidence(phones)
+    return replace(
+        opportunity,
+        contact_emails=merged_emails,
+        contact_phones=merged_phones,
+        contact_email=opportunity.contact_email or (merged_emails[0]["value"] if merged_emails else None),
+        contact_phone=opportunity.contact_phone or (merged_phones[0]["value"] if merged_phones else None),
+        application_url=application_url,
+    )
+
+
+def _walk_json(value: Any) -> list[tuple[str, Any]]:
+    result: list[tuple[str, Any]] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            result.append((str(key), child))
+            result.extend(_walk_json(child))
+    elif isinstance(value, list):
+        for child in value:
+            result.extend(_walk_json(child))
+    return result
 
 
 def _extract_email(text: str | None) -> str | None:

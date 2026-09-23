@@ -165,6 +165,41 @@ class BaReaderTest(unittest.TestCase):
         self.assertIsNone(_company_website("www.gute-jobs.de"))
         self.assertEqual("https://www.example.de/", _company_website("www.example.de/karriere"))
 
+    def test_reads_json_ld_contact_without_country_filtering(self) -> None:
+        list_state = {
+            "suchergebnis": {
+                "ergebnisliste": [{
+                    "referenznummer": "TEST-JSONLD",
+                    "stellenangebotsTitel": "Ausbildung JSON-LD",
+                    "stellenlokationen": [{"adresse": {"ort": "Berlin"}}],
+                }]
+            }
+        }
+        detail_state = {"jobdetail": {"stellenangebotsBeschreibung": "Beschreibung"}}
+        list_document = '<script id="ng-state" type="application/json">' + json.dumps(list_state) + "</script>"
+        detail_document = (
+            '<script type="application/ld+json">'
+            + json.dumps({
+                "@type": "JobPosting",
+                "applicationContact": {
+                    "email": "jobs@example.de",
+                    "telephone": "+31 88 864 2310",
+                },
+            })
+            + "</script>"
+            + '<script id="ng-state" type="application/json">'
+            + json.dumps(detail_state)
+            + "</script>"
+        )
+        opportunity = extract_opportunities(list_document, "https://example.org/search")[0]
+
+        enriched = enrich_from_detail(opportunity, detail_document)
+
+        self.assertEqual("jobs@example.de", enriched.contact_email)
+        self.assertEqual("+31 88 864 2310", enriched.contact_phone)
+        self.assertEqual(95, enriched.contact_emails[0]["confidence_score"])
+        self.assertEqual(95, enriched.contact_phones[0]["confidence_score"])
+
 
 if __name__ == "__main__":
     unittest.main()
