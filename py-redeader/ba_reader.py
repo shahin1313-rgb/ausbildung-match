@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import re
 import sys
 import time
 from dataclasses import asdict, dataclass, replace
@@ -186,6 +187,7 @@ def extract_job_detail(document: str) -> dict[str, Any]:
 
 def enrich_from_detail(opportunity: Opportunity, document: str) -> Opportunity:
     detail = extract_job_detail(document)
+    description = _optional_string(detail.get("stellenangebotsBeschreibung"))
     contact = _first_dict(
         detail,
         "kontakt",
@@ -217,6 +219,10 @@ def enrich_from_detail(opportunity: Opportunity, document: str) -> Opportunity:
         "phoneNumber",
     ) or _recursive_scalar(detail, {"telefon", "telefonnummer", "phone"})
 
+    # Many BA listings publish contact data only inside the free-text description.
+    contact_email = contact_email or _extract_email(description)
+    contact_phone = contact_phone or _extract_phone(description)
+
     address = _first_dict(contact, "adresse", "address")
     contact_address = _format_address(address)
     application_url = (
@@ -227,7 +233,7 @@ def enrich_from_detail(opportunity: Opportunity, document: str) -> Opportunity:
 
     return replace(
         opportunity,
-        description_de=_optional_string(detail.get("stellenangebotsBeschreibung")),
+        description_de=description,
         education_requirement=_optional_string(detail.get("geforderterBildungsabschluss")),
         contact_name=contact_name,
         contact_email=_optional_email(contact_email),
@@ -314,6 +320,43 @@ def _optional_https_url(value: Any) -> str | None:
 def _optional_email(value: Any) -> str | None:
     text = _optional_string(value)
     return text if text and "@" in text and " " not in text else None
+
+
+def _extract_email(text: str | None) -> str | None:
+    if not text:
+        return None
+    match = re.search(
+        r"(?<![\w.+-])([\w.!#$%&'*+/=?^`{|}~-]+@[\w-]+(?:\.[\w-]+)+)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return match.group(1).rstrip(".,;:)") if match else None
+
+
+def _extract_phone(text: str | None) -> str | None:
+    if not text:
+        return None
+
+    # International German numbers are reliable even without a preceding label.
+    international = re.search(r"(?<!\w)(\+49[\s()/.\-]*\d(?:[\d\s()/.\-]{5,}\d))", text)
+    if international:
+        return _normalize_phone(international.group(1))
+
+    # National numbers are accepted only when explicitly labelled. This prevents
+    # dates such as 01.02.2027 from being interpreted as telephone numbers.
+    labelled = re.search(
+        r"(?:telefon|tel\.?|mobil|handy|phone)\s*(?:nummer)?\s*[:\-]?\s*"
+        r"((?:0\d)[\d\s()/.\-]{5,}\d)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return _normalize_phone(labelled.group(1)) if labelled else None
+
+
+def _normalize_phone(value: str) -> str | None:
+    normalized = re.sub(r"\s+", " ", value).strip(" .,;:-")
+    digits = re.sub(r"\D", "", normalized)
+    return normalized if 7 <= len(digits) <= 15 else None
 
 
 def _value_at_path(data: dict[str, Any], path: str) -> Any:

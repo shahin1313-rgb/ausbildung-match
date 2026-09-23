@@ -85,6 +85,58 @@ class BaReaderTest(unittest.TestCase):
         self.assertEqual("Teststraße 10, 10115 Berlin", enriched.contact_address)
         self.assertEqual("Vollständige Beschreibung", enriched.description_de)
 
+    def test_extracts_email_and_international_phone_from_description(self) -> None:
+        list_state = {
+            "suchergebnis": {
+                "ergebnisliste": [
+                    {
+                        "referenznummer": "TEST-3",
+                        "stellenangebotsTitel": "Ausbildung Kontakt",
+                        "stellenlokationen": [{"adresse": {"ort": "Berlin"}}],
+                    }
+                ]
+            }
+        }
+        detail_state = {
+            "jobdetail": {
+                "stellenangebotsBeschreibung": (
+                    "Start am 01.02.2027. Bewerbung an jobs@example.de "
+                    "oder telefonisch unter +49 89 41999 038."
+                )
+            }
+        }
+        list_document = '<script id="ng-state" type="application/json">' + json.dumps(list_state) + "</script>"
+        detail_document = '<script id="ng-state" type="application/json">' + json.dumps(detail_state) + "</script>"
+        opportunity = extract_opportunities(list_document, "https://example.org/search")[0]
+
+        enriched = enrich_from_detail(opportunity, detail_document)
+
+        self.assertEqual("jobs@example.de", enriched.contact_email)
+        self.assertEqual("+49 89 41999 038", enriched.contact_phone)
+
+    def test_does_not_treat_a_date_as_a_phone_number(self) -> None:
+        list_state = {
+            "suchergebnis": {
+                "ergebnisliste": [
+                    {
+                        "referenznummer": "TEST-4",
+                        "stellenangebotsTitel": "Ausbildung Datum",
+                        "stellenlokationen": [{"adresse": {"ort": "Berlin"}}],
+                    }
+                ]
+            }
+        }
+        detail_state = {
+            "jobdetail": {"stellenangebotsBeschreibung": "Die Ausbildung startet am 01.02.2027."}
+        }
+        list_document = '<script id="ng-state" type="application/json">' + json.dumps(list_state) + "</script>"
+        detail_document = '<script id="ng-state" type="application/json">' + json.dumps(detail_state) + "</script>"
+        opportunity = extract_opportunities(list_document, "https://example.org/search")[0]
+
+        enriched = enrich_from_detail(opportunity, detail_document)
+
+        self.assertIsNone(enriched.contact_phone)
+
 
 if __name__ == "__main__":
     unittest.main()
