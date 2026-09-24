@@ -8,13 +8,16 @@ It does not connect to the Laravel database or send data to any API.
 from __future__ import annotations
 
 import argparse
+import difflib
 import html
 import ipaddress
 import json
+import os
 import re
 import socket
 import sys
 import time
+import unicodedata
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -26,6 +29,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 
 BASE_URL = "https://www.arbeitsagentur.de/jobsuche/suche"
+GOOGLE_PLACES_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 USER_AGENT = "AusbildungMatchCollector/0.1 (local development test)"
 MAX_RESPONSE_BYTES = 8_000_000
 MAX_COMPANY_RESPONSE_BYTES = 2_000_000
@@ -72,6 +76,12 @@ class Opportunity:
     application_redirect_count: int
     detail_url: str
     source_url: str
+    google_place_id: str | None = None
+    google_maps_uri: str | None = None
+    google_match_score: int | None = None
+    google_match_status: str | None = None
+    needs_human_review: bool = False
+    review_reason: str | None = None
     source: str = "Bundesagentur für Arbeit"
 
 
@@ -381,11 +391,11 @@ def enrich_from_company_website(opportunity: Opportunity, delay: float = 0.7) ->
                 opportunity,
                 contact_email=opportunity.contact_email or email,
                 contact_phone=opportunity.contact_phone or phone,
-                contact_form_url=form_url,
-                contact_type=opportunity.contact_type or page_type,
-                contact_source_url=opportunity.contact_source_url or normalized,
-                contact_confidence=opportunity.contact_confidence or confidence,
-                contact_score=opportunity.contact_score or score,
+                contact_form_url=opportunity.contact_form_url or form_url,
+                contact_type=page_type if score > (opportunity.contact_score or 0) else opportunity.contact_type,
+                contact_source_url=normalized if score > (opportunity.contact_score or 0) else opportunity.contact_source_url,
+                contact_confidence=confidence if score > (opportunity.contact_score or 0) else opportunity.contact_confidence,
+                contact_score=max(opportunity.contact_score or 0, score),
                 contact_emails=_dedupe_evidence(existing_emails),
                 contact_phones=_dedupe_evidence(existing_phones),
             )
@@ -394,6 +404,197 @@ def enrich_from_company_website(opportunity: Opportunity, delay: float = 0.7) ->
             time.sleep(delay)
 
     return _ensure_contact_method(opportunity)
+
+
+def enrich_from_google_places(
+    opportunity: Opportunity,
+    api_key: str,
+    min_auto_score: int = 85,
+    min_review_score: int = 70,
+) -> Opportunity:
+    """Complete an unresolved company using Google Places Text Search.
+
+    Google is deliberately a fallback. A candidate is accepted only after
+    matching name and location evidence. Medium-confidence candidates are
+    recorded for human review without merging their contact data.
+    """
+    if not opportunity.employer_name:
+        return opportunity
+
+    query_parts = [
+        opportunity.employer_name,
+        opportunity.postal_code,
+        opportunity.city,
+        opportunity.country or "Deutschland",
+    ]
+    candidates = _google_places_text_search(
+        " ".join(part for part in query_parts if part), api_key
+    )
+    scored = sorted(
+        ((_score_google_candidate(opportunity, item), item) for item in candidates),
+        key=lambda pair: pair[0],
+        reverse=True,
+    )
+    if not scored:
+        return replace(
+            opportunity,
+            google_match_status="not_found",
+            review_reason="Google Places returned no matching company.",
+        )
+
+    score, candidate = scored[0]
+    place_id = _optional_string(candidate.get("id"))
+    maps_uri = _optional_https_url(candidate.get("googleMapsUri"))
+    if score < min_review_score:
+        return replace(
+            opportunity,
+            google_place_id=place_id,
+            google_maps_uri=maps_uri,
+            google_match_score=score,
+            google_match_status="rejected",
+            review_reason="Best Google Places candidate did not meet the review threshold.",
+        )
+    if score < min_auto_score:
+        return replace(
+            opportunity,
+            google_place_id=place_id,
+            google_maps_uri=maps_uri,
+            google_match_score=score,
+            google_match_status="review",
+            needs_human_review=True,
+            review_reason="Google Places candidate requires human identity verification.",
+        )
+
+    phone = _normalize_phone(
+        _optional_string(candidate.get("internationalPhoneNumber"))
+        or _optional_string(candidate.get("nationalPhoneNumber"))
+        or ""
+    )
+    website = _company_website(candidate.get("websiteUri"))
+    address = _optional_string(candidate.get("formattedAddress"))
+    phone_evidence = _contact_evidence(
+        phone, maps_uri or GOOGLE_PLACES_TEXT_SEARCH_URL, "google_places", score
+    )
+    return replace(
+        opportunity,
+        company_website=opportunity.company_website or website,
+        contact_phone=opportunity.contact_phone or phone,
+        contact_address=opportunity.contact_address or address,
+        contact_type=opportunity.contact_type or ("company_general" if phone else None),
+        contact_source_url=opportunity.contact_source_url or (maps_uri if phone else None),
+        contact_confidence=opportunity.contact_confidence or ("high" if score >= 90 else "medium"),
+        contact_score=max(opportunity.contact_score or 0, score) if phone else opportunity.contact_score,
+        contact_phones=_dedupe_evidence([
+            *opportunity.contact_phones,
+            *([phone_evidence] if phone_evidence else []),
+        ]),
+        google_place_id=place_id,
+        google_maps_uri=maps_uri,
+        google_match_score=score,
+        google_match_status="accepted",
+        needs_human_review=False,
+        review_reason=None,
+    )
+
+
+def _google_places_text_search(query: str, api_key: str) -> list[dict[str, Any]]:
+    payload = json.dumps({
+        "textQuery": query,
+        "languageCode": "de",
+        "regionCode": "DE",
+        "pageSize": 5,
+    }).encode("utf-8")
+    request = Request(
+        GOOGLE_PLACES_TEXT_SEARCH_URL,
+        data=payload,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": api_key,
+            "X-Goog-FieldMask": (
+                "places.id,places.displayName,places.formattedAddress,"
+                "places.addressComponents,places.websiteUri,"
+                "places.nationalPhoneNumber,places.internationalPhoneNumber,"
+                "places.googleMapsUri,places.businessStatus"
+            ),
+            "User-Agent": USER_AGENT,
+        },
+    )
+    try:
+        with urlopen(request, timeout=15) as response:
+            body = response.read(MAX_COMPANY_RESPONSE_BYTES + 1)
+    except (HTTPError, URLError, TimeoutError, ValueError) as error:
+        raise CollectorError("Google Places lookup failed.") from error
+    if len(body) > MAX_COMPANY_RESPONSE_BYTES:
+        raise CollectorError("Google Places response exceeded the 2 MB safety limit.")
+    try:
+        result = json.loads(body.decode("utf-8"))
+    except json.JSONDecodeError as error:
+        raise CollectorError("Google Places returned invalid JSON.") from error
+    places = result.get("places", []) if isinstance(result, dict) else []
+    return [item for item in places if isinstance(item, dict)]
+
+
+def _score_google_candidate(opportunity: Opportunity, candidate: dict[str, Any]) -> int:
+    display_name = candidate.get("displayName") or {}
+    candidate_name = display_name.get("text") if isinstance(display_name, dict) else display_name
+    components = candidate.get("addressComponents") or []
+    candidate_postal = _google_address_component(components, "postal_code")
+    candidate_city = (
+        _google_address_component(components, "locality")
+        or _google_address_component(components, "postal_town")
+    )
+    candidate_address = _optional_string(candidate.get("formattedAddress"))
+    candidate_domain = _url_domain(candidate.get("websiteUri"))
+    known_domain = _url_domain(opportunity.company_website)
+
+    score = round(45 * _text_similarity(opportunity.employer_name, candidate_name))
+    if opportunity.postal_code and candidate_postal == opportunity.postal_code:
+        score += 25
+    if opportunity.city and _text_similarity(opportunity.city, candidate_city) >= 0.9:
+        score += 20
+    if known_domain and candidate_domain and known_domain == candidate_domain:
+        score += 5
+    if opportunity.contact_address and candidate_address:
+        score += round(5 * _text_similarity(opportunity.contact_address, candidate_address))
+    return min(score, 100)
+
+
+def _google_address_component(components: Any, wanted_type: str) -> str | None:
+    if not isinstance(components, list):
+        return None
+    for component in components:
+        if isinstance(component, dict) and wanted_type in (component.get("types") or []):
+            return _optional_string(component.get("longText") or component.get("shortText"))
+    return None
+
+
+def _text_similarity(left: Any, right: Any) -> float:
+    def normalize(value: Any) -> str:
+        text = unicodedata.normalize("NFKD", _optional_string(value) or "")
+        text = "".join(char for char in text if not unicodedata.combining(char))
+        text = re.sub(r"\b(gmbh|ag|kg|ug|mbh|co)\b", " ", text.casefold())
+        return re.sub(r"[^a-z0-9]+", " ", text).strip()
+    return difflib.SequenceMatcher(None, normalize(left), normalize(right)).ratio()
+
+
+def _url_domain(value: Any) -> str | None:
+    url = _optional_string(value)
+    if not url:
+        return None
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    return (urlparse(url).hostname or "").lower().removeprefix("www.") or None
+
+
+def _has_direct_contact(opportunity: Opportunity) -> bool:
+    return bool(opportunity.contact_email or opportunity.contact_phone)
+
+
+def _needs_google_enrichment(opportunity: Opportunity) -> bool:
+    return not opportunity.company_website and not (
+        opportunity.contact_email and opportunity.contact_phone
+    )
 
 
 def _ensure_contact_method(opportunity: Opportunity) -> Opportunity:
@@ -420,6 +621,9 @@ def collect(
     detail_delay: float = 1.0,
     include_company_contacts: bool = False,
     company_delay: float = 0.7,
+    google_places_api_key: str | None = None,
+    google_min_auto_score: int = 85,
+    google_min_review_score: int = 70,
 ) -> list[Opportunity]:
     collected: dict[str, Opportunity] = {}
 
@@ -464,18 +668,43 @@ def collect(
     company_enriched: list[Opportunity] = []
     company_cache: dict[str, Opportunity] = {}
     for index, opportunity in enumerate(enriched, start=1):
+        # Stage 3: follow the application URL and reuse its final company domain
+        # before using an external company directory.
         opportunity = _resolve_application_destination(opportunity)
-        if opportunity.contact_email or opportunity.contact_phone:
-            company_enriched.append(_ensure_contact_method(opportunity))
-            continue
+
+        # Stage 4: prefer an official website already supplied by BA or found
+        # through the final application destination.
         cache_key = opportunity.company_website or ""
         if cache_key and cache_key in company_cache:
             company_enriched.append(_copy_company_contact(opportunity, company_cache[cache_key]))
             continue
         result = enrich_from_company_website(opportunity, company_delay)
+
+        # Stages 5-6: only incomplete records are sent to Google Places. Strong
+        # matches may supply a missing official website/phone/address, after
+        # which the normal official-site contact extractor runs again.
+        if google_places_api_key and _needs_google_enrichment(result):
+            try:
+                result = enrich_from_google_places(
+                    result,
+                    google_places_api_key,
+                    min_auto_score=google_min_auto_score,
+                    min_review_score=google_min_review_score,
+                )
+            except CollectorError as error:
+                print(f"Google Places skipped for {opportunity.external_id}: {error}", file=sys.stderr)
+                result = replace(
+                    result,
+                    google_match_status="error",
+                    review_reason=str(error),
+                )
+            if result.google_match_status == "accepted" and result.company_website:
+                result = enrich_from_company_website(result, company_delay)
+
         company_enriched.append(result)
-        if cache_key:
-            company_cache[cache_key] = result
+        final_cache_key = result.company_website or cache_key
+        if final_cache_key and result.google_match_status != "review":
+            company_cache[final_cache_key] = result
         print(
             f"Company contact {index}/{len(enriched)}: {opportunity.employer_name or opportunity.external_id}",
             file=sys.stderr,
@@ -490,6 +719,13 @@ def write_json(path: Path, opportunities: list[Opportunity], query: str, city: s
         "collected_at": datetime.now(timezone.utc).isoformat(),
         "query": {"keyword": query, "city": city},
         "count": len(opportunities),
+        "quality_summary": {
+            "with_email": sum(bool(item.contact_email) for item in opportunities),
+            "with_phone": sum(bool(item.contact_phone) for item in opportunities),
+            "with_company_website": sum(bool(item.company_website) for item in opportunities),
+            "google_matches_accepted": sum(item.google_match_status == "accepted" for item in opportunities),
+            "needs_human_review": sum(item.needs_human_review for item in opportunities),
+        },
         "opportunities": [asdict(item) for item in opportunities],
     }
     path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -623,9 +859,26 @@ def _resolve_application_destination(opportunity: Opportunity) -> Opportunity:
             opportunity,
             final_application_url=final_url,
             application_redirect_count=tracker.count,
+            company_website=opportunity.company_website or _website_from_application_url(final_url),
         )
     except (CollectorError, HTTPError, URLError, TimeoutError, ValueError):
-        return replace(opportunity, final_application_url=opportunity.application_url)
+        return replace(
+            opportunity,
+            final_application_url=opportunity.application_url,
+            company_website=opportunity.company_website
+            or _website_from_application_url(opportunity.application_url),
+        )
+
+
+def _website_from_application_url(value: Any) -> str | None:
+    url = _optional_https_url(value)
+    if not url:
+        return None
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    if not host or any(host == domain or host.endswith("." + domain) for domain in JOB_PLATFORM_DOMAINS):
+        return None
+    return f"https://{parsed.netloc}/"
 
 
 def _copy_company_contact(opportunity: Opportunity, cached: Opportunity) -> Opportunity:
@@ -860,6 +1113,25 @@ def parse_args() -> argparse.Namespace:
         help="Seconds between company website requests",
     )
     parser.add_argument(
+        "--google-places",
+        action="store_true",
+        help="Use Google Places as a fallback for incomplete company records",
+    )
+    parser.add_argument(
+        "--google-auto-score",
+        type=int,
+        default=85,
+        choices=range(70, 101),
+        help="Minimum company-match score accepted automatically (70-100)",
+    )
+    parser.add_argument(
+        "--google-review-score",
+        type=int,
+        default=70,
+        choices=range(0, 86),
+        help="Minimum score retained for human review (0-85)",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=Path("storage/app/private/imports/ba-opportunities.json"),
@@ -869,6 +1141,19 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    google_api_key = os.environ.get("GOOGLE_PLACES_API_KEY") if args.google_places else None
+    if args.google_places and not google_api_key:
+        print(
+            "Collector error: --google-places requires GOOGLE_PLACES_API_KEY.",
+            file=sys.stderr,
+        )
+        return 2
+    if args.google_review_score > args.google_auto_score:
+        print(
+            "Collector error: --google-review-score cannot exceed --google-auto-score.",
+            file=sys.stderr,
+        )
+        return 2
     try:
         opportunities = collect(
             args.query,
@@ -877,8 +1162,11 @@ def main() -> int:
             max(args.delay, 0),
             include_details=not args.skip_details,
             detail_delay=max(args.detail_delay, 0),
-            include_company_contacts=args.company_contacts and not args.skip_details,
+            include_company_contacts=(args.company_contacts or args.google_places) and not args.skip_details,
             company_delay=max(args.company_delay, 0),
+            google_places_api_key=google_api_key,
+            google_min_auto_score=args.google_auto_score,
+            google_min_review_score=args.google_review_score,
         )
         write_json(args.output, opportunities, args.query, args.city)
     except CollectorError as error:
