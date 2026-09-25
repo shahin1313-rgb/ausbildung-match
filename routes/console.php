@@ -6,6 +6,12 @@ Schedule::command('opportunities:expire')
     ->dailyAt('02:00')
     ->withoutOverlapping();
 
+Schedule::command('opportunities:sync-bundesagentur')
+    ->dailyAt('02:30')
+    ->timezone('Europe/Berlin')
+    ->withoutOverlapping()
+    ->onOneServer();
+
 Schedule::command('opportunities:weekly-digest')
     ->weeklyOn(1, '08:00')
     ->timezone('Europe/Berlin')
